@@ -18,6 +18,7 @@ export const api = {
   realSell: (mint) => axios.post(`${API}/real/sell`, { mint }).then((r) => r.data),
   setStrategy: (s) => axios.post(`${API}/bot/strategy`, s).then((r) => r.data),
   setGuardrails: (g) => axios.post(`${API}/bot/guardrails`, g).then((r) => r.data),
+  closeAll: () => axios.post(`${API}/positions/close_all`).then((r) => r.data),
 };
 
 export const fmtUsd = (n) =>

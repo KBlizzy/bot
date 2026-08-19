@@ -157,6 +157,11 @@ async def positions():
     return {"positions": engine.positions_view(), "mode": "paper"}
 
 
+@api_router.post("/positions/close_all")
+async def close_all_positions():
+    return await engine.close_all()
+
+
 @api_router.get("/trades")
 async def trades(hours: int = 24):
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()

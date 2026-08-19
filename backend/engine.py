@@ -489,12 +489,30 @@ class Engine:
         pos = self.real_positions.get(mint)
         if not pos:
             return
+        # if the wallet no longer actually holds this token, clear the slot so
+        # the bot can trade again (handles already-sold / phantom positions)
+        held = await real_trader.wallet_token_balance(mint)
+        if held is not None and held <= 0:
+            self.real_positions.pop(mint, None)
+            await self.db.real_positions.delete_one({"_id": mint})
+            self._log_decision({"mint": mint, "symbol": pos["symbol"], "name": pos["name"]},
+                               "SELL", "cleared — not held on-chain (slot freed)")
+            return
         try:
             sig = await real_trader.execute_trade("sell", mint, "100%", False)
         except Exception as e:
+            pos["sell_fails"] = pos.get("sell_fails", 0) + 1
             self._log_decision({"mint": mint, "symbol": pos["symbol"], "name": pos["name"]},
-                               "SKIP", f"real sell failed: {str(e)[:80]}")
+                               "SKIP", f"real sell failed ({pos['sell_fails']}): {str(e)[:60]}")
             print("real sell error:", e)
+            if pos["sell_fails"] >= 3:  # give up -> free the slot
+                self.real_positions.pop(mint, None)
+                await self.db.real_positions.delete_one({"_id": mint})
+                self._log_decision({"mint": mint, "symbol": pos["symbol"]},
+                                   "SELL", "cleared after repeated sell failures (slot freed)")
+            else:
+                await self.db.real_positions.update_one(
+                    {"_id": mint}, {"$set": {"sell_fails": pos["sell_fails"]}})
             return
         self.real_positions.pop(mint, None)
         await self.db.real_positions.delete_one({"_id": mint})
@@ -542,6 +560,17 @@ class Engine:
                 "history": [],
             })
         return sorted(out, key=lambda x: x["entry_time"], reverse=True)
+
+    async def close_all(self):
+        """Close every open position for the active mode (frees all slots)."""
+        if self.bot["mode"] == "real":
+            for mint in list(self.real_positions.keys()):
+                cur = await self._real_price(mint)
+                await self._real_sell(mint, "manual close-all", cur)
+            return {"closed": "real"}
+        for mint in list(self.positions.keys()):
+            await self._close(mint, "manual close-all")
+        return {"closed": "paper"}
 
     def tick_wallets(self):
         # smart wallets occasionally "buy" a live coin -> copy-trade feed

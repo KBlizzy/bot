@@ -102,6 +102,11 @@ async def token_price_usd(mint):
         return None
 
 
+async def wallet_token_balance(mint):
+    """How much of `mint` our own trading wallet currently holds."""
+    return await creator_token_balance(public_key(), mint)
+
+
 async def creator_token_balance(creator, mint):
     """Remaining amount of `mint` still held by the dev/creator wallet.
     Returns float amount, or None if it can't be determined."""

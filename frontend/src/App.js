@@ -353,7 +353,7 @@ const Wallets = ({ wallets, copy }) => (
 );
 
 /* ================= POSITIONS + TRADES ================= */
-const PositionsAndTrades = ({ positions, trades, copy, isReal, onSell }) => {
+const PositionsAndTrades = ({ positions, trades, copy, isReal, onSell, onCloseAll }) => {
   const [tab, setTab] = useState("positions");
   return (
     <div className="panel rounded-sm" data-testid="ledger-panel">
@@ -366,6 +366,12 @@ const PositionsAndTrades = ({ positions, trades, copy, isReal, onSell }) => {
           className={`font-head text-sm pb-1 ${tab === "history" ? "tab-active" : "text-[#8A8F98]"}`}>
           TRADE HISTORY 24H ({trades.length})
         </button>
+        {positions.length > 0 && (
+          <button data-testid="close-all-btn" onClick={onCloseAll}
+            className="ml-auto font-num text-[10px] px-3 py-1.5 rounded-sm bg-[#FF3B30]/15 text-[#FF3B30] hover:bg-[#FF3B30] hover:text-white transition-colors">
+            CLOSE ALL
+          </button>
+        )}
       </div>
       <div className="overflow-auto" style={{ maxHeight: "340px" }}>
         {tab === "positions" ? (
@@ -709,6 +715,16 @@ function App() {
       toast.error(e?.response?.data?.detail || "Sell failed");
     }
   };
+  const onCloseAll = async () => {
+    toast.message("Closing all positions…");
+    try {
+      await api.closeAll();
+      toast.success("Closing all positions", { description: "Slots freeing up" });
+      refetchAll();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Close all failed");
+    }
+  };
 
   const st = state.data;
   const isReal = st?.mode === "real";
@@ -748,6 +764,7 @@ function App() {
               copy={copy}
               isReal={isReal}
               onSell={onRealSell}
+              onCloseAll={onCloseAll}
             />
           </div>
           <div className="lg:col-span-4">
