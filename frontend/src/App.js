@@ -610,6 +610,7 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
   const [minHolders, setMinHolders] = useState(10);
   const [flatExit, setFlatExit] = useState(1);
   const [minVol, setMinVol] = useState(5000);
+  const [cooldown, setCooldown] = useState(5);
   const [gEnabled, setGEnabled] = useState(true);
   const [dayLimit, setDayLimit] = useState(0.05);
   const [cap, setCap] = useState(0.3);
@@ -625,6 +626,7 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
       setMinHolders(s.min_holders ?? 10);
       setFlatExit(s.flat_exit_min ?? 1);
       setMinVol(s.min_volume_usd ?? 5000);
+      setCooldown(s.rebuy_cooldown_min ?? 5);
       setGEnabled(g.enabled);
       setDayLimit(g.daily_loss_limit_sol);
       setCap(g.total_spend_cap_sol);
@@ -643,6 +645,7 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
         min_holders: parseInt(minHolders, 10),
         flat_exit_min: parseFloat(flatExit),
         min_volume_usd: parseFloat(minVol),
+        rebuy_cooldown_min: parseFloat(cooldown),
       });
       await api.setGuardrails({
         enabled: gEnabled,
@@ -676,6 +679,7 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
           <NumField label="Min Holders" value={minHolders} onChange={setMinHolders} testid="tune-minholders" />
           <NumField label="Flat Exit (no move)" value={flatExit} onChange={setFlatExit} step="0.5" suffix="min" testid="tune-flatexit" />
           <NumField label="Min 24h Volume" value={minVol} onChange={setMinVol} step="1000" suffix="$" testid="tune-minvol" />
+          <NumField label="Re-buy Cooldown" value={cooldown} onChange={setCooldown} step="1" suffix="min" testid="tune-cooldown" />
         </div>
 
         <div className="border-t border-[#232528] pt-3 space-y-2.5">

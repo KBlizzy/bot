@@ -46,6 +46,7 @@ class StrategyReq(BaseModel):
     min_holders: int = 10
     flat_exit_min: float = 1
     min_volume_usd: float = 5000
+    rebuy_cooldown_min: float = 5
 
 
 class GuardrailReq(BaseModel):
@@ -130,6 +131,7 @@ async def set_strategy(req: StrategyReq):
         "min_holders": max(0, int(req.min_holders)),
         "flat_exit_min": max(0.1, req.flat_exit_min),
         "min_volume_usd": max(0.0, req.min_volume_usd),
+        "rebuy_cooldown_min": max(0.0, req.rebuy_cooldown_min),
     }
     engine.bot["strategy"] = s
     engine.bot["settings"]["trade_size_sol"] = s["trade_size_sol"]

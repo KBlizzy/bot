@@ -47,6 +47,7 @@ class Engine:
         self.real_positions = {} # mint -> position dict (open, REAL on-chain)
         self.decisions = []      # recent AI decisions
         self.wallets = []        # scouted smart wallets
+        self.sell_cooldowns = {} # mint -> datetime of last sell (re-buy cooldown)
         self._loop_count = 0
         self.bot = {
             "mode": "paper",
@@ -71,6 +72,7 @@ class Engine:
                 "min_holders": 10,
                 "flat_exit_min": 1,
                 "min_volume_usd": 5000,
+                "rebuy_cooldown_min": 5,
             },
             "guardrails": {
                 "enabled": True,
@@ -241,6 +243,13 @@ class Engine:
         score = c["vol_spike"] * 2 + growth * 3 + newness * 1.5
         return score, growth, age, newness
 
+    def _in_cooldown(self, mint):
+        t = self.sell_cooldowns.get(mint)
+        if not t:
+            return False
+        mins = self._strat().get("rebuy_cooldown_min", 5)
+        return (now() - t).total_seconds() < mins * 60
+
     def passes_filters(self, c):
         if not c["has_social"]:
             return False, "no social link"
@@ -297,6 +306,8 @@ class Engine:
         for c in self.coins.values():
             if c["mint"] in self.positions:
                 continue
+            if self._in_cooldown(c["mint"]):
+                continue
             ok, why = self.passes_filters(c)
             if not ok:
                 continue
@@ -339,6 +350,7 @@ class Engine:
         pos = self.positions.pop(mint, None)
         if not pos:
             return
+        self.sell_cooldowns[mint] = now()
         c = self.coins.get(mint)
         exit_price = c["price"] if c else pos["entry_price"] * 0.5
         proceeds = pos["qty"] * exit_price
@@ -451,6 +463,8 @@ class Engine:
                 continue
             if c["mint"] in self.real_positions:
                 continue
+            if self._in_cooldown(c["mint"]):
+                continue
             ok, _ = self.passes_filters(c)
             if not ok:
                 continue
@@ -498,6 +512,7 @@ class Engine:
         pos = self.real_positions.get(mint)
         if not pos:
             return
+        self.sell_cooldowns[mint] = now()
         # if the wallet no longer actually holds this token, clear the slot so
         # the bot can trade again (handles already-sold / phantom positions)
         held = await real_trader.wallet_token_balance(mint)
