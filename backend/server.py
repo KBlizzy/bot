@@ -55,6 +55,11 @@ class GuardrailReq(BaseModel):
     total_spend_cap_sol: float
 
 
+class TrackerReq(BaseModel):
+    enabled: bool
+    address: str = ""
+
+
 @api_router.get("/")
 async def root():
     return {"message": "pump.fun bot online"}
@@ -149,6 +154,17 @@ async def set_guardrails(req: GuardrailReq):
     engine.bot["guardrails"] = g
     await engine.save()
     return {"ok": True, "guardrails": g}
+
+
+@api_router.post("/bot/tracker")
+async def set_tracker(req: TrackerReq):
+    addr = req.address.strip()
+    if req.enabled and not addr:
+        raise HTTPException(400, "wallet address required to enable tracker")
+    engine.bot["tracked_wallet"] = addr
+    engine.bot["tracker_enabled"] = req.enabled
+    await engine.save()
+    return {"ok": True, "tracked_wallet": addr, "tracker_enabled": req.enabled}
 
 
 @api_router.post("/bot/reset_spend")

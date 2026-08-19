@@ -83,6 +83,8 @@ class Engine:
             "loss_today_sol": 0.0,
             "total_spent_sol": 0.0,
             "day": now().date().isoformat(),
+            "tracked_wallet": "",
+            "tracker_enabled": False,
         }
         self._tasks = []
 
@@ -302,6 +304,8 @@ class Engine:
         # --- scan for buys ---
         if self.bot["mode"] != "paper":
             return  # real mode is a simulation shell; no auto real trades
+        if self.bot.get("tracker_enabled"):
+            return  # tracker mode: only copy the tracked wallet, no self-scan
         candidates = []
         for c in self.coins.values():
             if c["mint"] in self.positions:
@@ -452,6 +456,9 @@ class Engine:
             await self.save()
             return
 
+        if self.bot.get("tracker_enabled"):
+            return  # tracker mode: only copy the tracked wallet, no self-scan
+
         # ---- scan for real buys (ONLY genuine live coins) ----
         trade_size = s["trade_size_sol"]
         cost_sol = trade_size + 0.0002  # trade + est. fees
@@ -584,6 +591,86 @@ class Engine:
                 "history": [],
             })
         return sorted(out, key=lambda x: x["entry_time"], reverse=True)
+
+    # ---------------- wallet tracker / copy-trade ----------------
+    async def copy_buy(self, c):
+        """Copy a buy from the tracked wallet, for the user's set amount only."""
+        if not self.bot.get("running"):
+            return
+        s = self._strat()
+        if self._in_cooldown(c["mint"]):
+            return
+        if self.bot["mode"] == "real":
+            if not real_trader.is_configured():
+                return
+            if c["mint"] in self.real_positions:
+                return
+            if self.guardrail_block():
+                return
+            if len(self.real_positions) >= s["max_positions"]:
+                return
+            if self.bot["real_balance_sol"] < s["trade_size_sol"] + 0.0002:
+                return
+            await self._real_buy(c, 0)
+        else:
+            if c["mint"] in self.positions:
+                return
+            if len(self.positions) >= s["max_positions"]:
+                return
+            if self.bot["paper_balance_usd"] < s["trade_size_sol"] * SOL_USD:
+                return
+            await self._open(c, 0, 0)
+
+    async def _on_tracked_trade(self, msg, wallet):
+        if not self.bot.get("tracker_enabled"):
+            return
+        if msg.get("txType") != "buy":
+            return
+        if msg.get("traderPublicKey") != wallet:
+            return
+        mint = msg.get("mint")
+        if not mint:
+            return
+        c = self.coins.get(mint)
+        if not c:
+            c = self._make_coin("live", {
+                "mint": mint,
+                "name": msg.get("name") or msg.get("symbol") or mint[:6],
+                "symbol": msg.get("symbol") or mint[:4].upper(),
+                "marketCapSol": msg.get("marketCapSol"),
+                "bonding_curve_key": msg.get("bondingCurveKey"),
+                "creator": None,
+                "socials": {"twitter": "", "telegram": "", "website": ""},
+                "image": "",
+            })
+            self.coins[mint] = c
+        self._log_decision(c, "BUY", f"copy-trade from tracked wallet {wallet[:4]}…{wallet[-4:]}")
+        await self.copy_buy(c)
+
+    async def tracker_loop(self):
+        import websockets
+        url = "wss://pumpportal.fun/api/data"
+        while True:
+            wallet = self.bot.get("tracked_wallet")
+            if not (self.bot.get("tracker_enabled") and wallet):
+                await asyncio.sleep(3)
+                continue
+            try:
+                async with websockets.connect(url, ping_interval=20) as ws:
+                    await ws.send(json.dumps(
+                        {"method": "subscribeAccountTrade", "keys": [wallet]}))
+                    async for raw in ws:
+                        if (not self.bot.get("tracker_enabled")
+                                or self.bot.get("tracked_wallet") != wallet):
+                            break
+                        try:
+                            msg = json.loads(raw)
+                        except Exception:
+                            continue
+                        await self._on_tracked_trade(msg, wallet)
+            except Exception as e:
+                print("tracker_loop:", e)
+                await asyncio.sleep(5)
 
     async def close_all(self):
         """Close every open position for the active mode (frees all slots)."""
@@ -742,6 +829,7 @@ class Engine:
         self._tasks.append(loop.create_task(self.ingest_loop()))
         self._tasks.append(loop.create_task(self.real_loop()))
         self._tasks.append(loop.create_task(self.dev_check_loop()))
+        self._tasks.append(loop.create_task(self.tracker_loop()))
 
     # ---------------- view builders ----------------
     def coin_view(self, c):

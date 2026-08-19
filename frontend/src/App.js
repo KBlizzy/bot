@@ -586,6 +586,66 @@ const RealWallet = ({ state, copy, refetch }) => {
   );
 };
 
+/* ================= WALLET TRACKER (copy-trade) ================= */
+const TrackerPanel = ({ state, refetch }) => {
+  const [addr, setAddr] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (state && !seeded.current) {
+      setAddr(state.tracked_wallet || "");
+      setEnabled(!!state.tracker_enabled);
+      seeded.current = true;
+    }
+  }, [state]);
+  const apply = async (en) => {
+    try {
+      const r = await api.setTracker({ enabled: en, address: addr });
+      setEnabled(r.tracker_enabled);
+      toast[en ? "success" : "message"](
+        en ? "Tracker ON — copying this wallet only" : "Tracker off — bot scouts on its own");
+      refetch();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Tracker update failed");
+    }
+  };
+  return (
+    <div className="panel rounded-sm" data-testid="tracker-panel">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-[#232528]">
+        <Crosshair size={15} className="text-[#14F195]" />
+        <span className="font-head text-sm">WALLET TRACKER</span>
+        {enabled && <span className="live-dot w-2 h-2 rounded-full bg-[#14F195] ml-auto" />}
+      </div>
+      <div className="p-4 space-y-3">
+        <p className="font-num text-[10px] text-[#8A8F98] leading-relaxed">
+          When ON, the bot <span className="text-white">only copies this wallet's buys</span> and won't scout on its own.
+          It invests your set trade size and still applies your sell rules no matter what.
+        </p>
+        <input data-testid="tracker-address" value={addr} onChange={(e) => setAddr(e.target.value)}
+          placeholder="wallet address to copy"
+          className="w-full bg-[#0B0C0E] border border-[#232528] rounded-sm px-3 py-2 font-num text-xs outline-none focus:border-[#14F195]" />
+        <div className="flex gap-2">
+          <button data-testid="tracker-toggle" onClick={() => apply(!enabled)}
+            className={`flex-1 py-2 font-num text-xs font-semibold rounded-sm transition-colors ${
+              enabled ? "bg-[#14F195] text-black" : "border border-[#232528] text-[#8A8F98] hover:text-white"
+            }`}>
+            {enabled ? "TRACKING ON" : "ENABLE TRACKER"}
+          </button>
+          {enabled && (
+            <button data-testid="tracker-update" onClick={() => apply(true)}
+              className="px-3 py-2 font-num text-xs border border-[#232528] rounded-sm text-[#8A8F98] hover:text-white">
+              UPDATE
+            </button>
+          )}
+        </div>
+        {enabled && addr && (
+          <div className="font-num text-[10px] text-[#14F195]">▶ copying {shortCa(addr)}</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 /* ================= STRATEGY TUNER + GUARDRAILS ================= */
 const NumField = ({ label, value, onChange, step = "1", suffix, testid }) => (
   <div>
@@ -861,6 +921,7 @@ function App() {
           </div>
           <div className="lg:col-span-4 space-y-3">
             {isReal && <RealWallet state={st} copy={copy} refetch={refetchAll} />}
+            <TrackerPanel state={st} refetch={refetchAll} />
             <StrategyPanel state={st} refetch={refetchAll} onResetSpend={onResetSpend} />
             <Decisions decisions={decisions.data?.decisions || []} />
           </div>

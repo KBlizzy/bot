@@ -1,0 +1,25 @@
+{
+  "summary": "Verified Wallet Tracker (copy-trade) feature end-to-end. Backend: 4/4 pytest cases in /app/backend/tests/test_tracker.py pass — (1) POST /api/bot/tracker with enabled:true + empty address returns 400 'wallet address required to enable tracker'; (2) enabling with a valid address persists in /api/bot/state (tracker_enabled=true, tracked_wallet=<addr>); (3) disabling clears it; (4) KEY SAFETY BEHAVIOR (paper-only): with tracker OFF the paper bot opens self-scanned positions within ~15s (baseline=1), then after /api/bot/restart + enable-tracker + running=true, waiting ~15s yields 0 positions — confirms tick_bot's 'tracker_enabled -> return' short-circuits self-scan. Frontend: tracker-panel with tracker-address input and tracker-toggle button all present and working. Empty-address enable -> backend 400 captured (toast + explanatory copy). Valid address -> toggle becomes 'TRACKING ON' and '▶ copying suqh…HQfK' line appears. Panel explanation copy correctly states 'only copies this wallet's buys and won't scout on its own'. Clicking again -> 'ENABLE TRACKER'. Post-test cleanup restored REAL mode + running=false + tracker off (verified visually: 'Bot is PAUSED' banner in REAL mode).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_tracker.py",
+    "/app/test_reports/pytest/tracker_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "engine.tracker_loop only breaks out of the async-for on the NEXT incoming websocket message after tracker is disabled/changed — meaning if the tracked wallet is idle, the old subscription can linger until a message arrives. Consider cancelling the socket task on tracker change for cleaner switching (LOW).",
+    "engine._on_tracked_trade filters msg.txType=='buy'. PumpPortal accountTrade messages may also fire on migrations/create; current filter is safe but worth a comment near the filter.",
+    "copy_buy in real mode does not decrement bot['real_balance_sol'] locally — it relies on real_loop's periodic balance refresh. This is fine but for a fast burst of copy-buys the local guard 'real_balance_sol < trade_size+0.0002' can be stale by up to 6s (informational).",
+    "TrackerReq accepts any string for address — no base58/length validation. A typo would still be accepted and passed to PumpPortal (which silently ignores). Minor UX improvement: validate length ~32-44 chars and base58 alphabet server-side.",
+    "TrackerPanel useEffect only seeds once via seeded.current; if the state changes externally (e.g., disabled via another tab or backend restart), the panel won't refresh. Consider re-syncing when state.tracker_enabled changes."
+  ],
+  "updated_files": ["/app/backend/tests/test_tracker.py (new)"],
+  "success_rate": {"backend": "100% (4/4 tracker tests)", "frontend": "100% (all tracker-panel flows)"},
+  "test_credentials": "none — app is open, no auth",
+  "seed_data_creation": "None. Used the wallet address suqh5sHtr8HyJ7q8scBimULPkPpA557prMG47xCHQfK from the request (safe: only subscribes to their trades, no funds involved).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "CRITICAL SAFETY: This app has REAL SOL mode. Never combine mode='real' with running=true unless explicitly required. Tracker tests are PAPER-only for behavior verification. After test cleanup mode is REAL, running=false, tracker off — verified via /api/bot/state screenshot. Tracker backend tests must run serially with `pytest -n 0 backend/tests/test_tracker.py` (xdist parallel causes fixture races because tests share global bot state). Existing test files: /app/backend/tests/backend_test.py, test_guardrails.py, test_tracker.py.",
+  "rca_of_the_issue": "N/A — feature works as designed. Tracker on -> tick_bot returns early before candidate scan (engine.py L307-308); tick_real returns early before real scan (L459-460). copy_buy still respects trade_size, max_positions, cooldown, and guardrail_block, matching the spec."
+}

@@ -20,6 +20,7 @@ export const api = {
   setGuardrails: (g) => axios.post(`${API}/bot/guardrails`, g).then((r) => r.data),
   closeAll: () => axios.post(`${API}/positions/close_all`).then((r) => r.data),
   resetSpend: () => axios.post(`${API}/bot/reset_spend`).then((r) => r.data),
+  setTracker: (t) => axios.post(`${API}/bot/tracker`, t).then((r) => r.data),
 };
 
 export const fmtUsd = (n) =>
