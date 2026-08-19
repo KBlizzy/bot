@@ -5,13 +5,40 @@ import { Toaster, toast } from "sonner";
 import {
   Activity, Play, Pause, RotateCcw, Copy, Check, Twitter, Send, Globe,
   TrendingUp, TrendingDown, Zap, Radio, Wallet, ArrowUpRight, Bot, Crosshair,
-  AlertTriangle, Flame, Sliders,
+  AlertTriangle, Flame, Sliders, Bell, BellOff,
 } from "lucide-react";
 import { api, fmtUsd, fmtMcap, fmtPct, fmtSol, shortCa } from "@/lib/api";
 import { Sparkline } from "@/components/Sparkline";
 
 const P = "#14F195";
 const L = "#FF3B30";
+
+let _audioCtx;
+const playBeep = (side) => {
+  try {
+    _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = _audioCtx.currentTime;
+    const o = _audioCtx.createOscillator();
+    const g = _audioCtx.createGain();
+    o.connect(g); g.connect(_audioCtx.destination);
+    o.type = "triangle";
+    o.frequency.setValueAtTime(side === "BUY" ? 660 : 392, t);
+    o.frequency.exponentialRampToValueAtTime(side === "BUY" ? 990 : 294, t + 0.12);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+    o.start(t); o.stop(t + 0.31);
+  } catch (e) { /* ignore */ }
+};
+const desktopNotify = (tr) => {
+  try {
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      new Notification(`PumpScout · ${tr.side} ${tr.symbol}`, {
+        body: tr.reason + (tr.side === "SELL" ? ` (${fmtPct(tr.pnl_pct)})` : ""),
+      });
+    }
+  } catch (e) { /* ignore */ }
+};
 
 function useCopy() {
   const [copied, setCopied] = useState(null);
@@ -67,7 +94,7 @@ const Flash = ({ value, format, className = "" }) => {
 };
 
 /* ================= HEADER ================= */
-const Header = ({ state, onToggle, onMode, onRestart }) => {
+const Header = ({ state, onToggle, onMode, onRestart, soundOn, onToggleSound }) => {
   const paper = state?.mode === "paper";
   return (
     <header className="sticky top-0 z-30 bg-[#0B0C0E] border-b border-[#232528]">
@@ -107,6 +134,16 @@ const Header = ({ state, onToggle, onMode, onRestart }) => {
         </div>
 
         <div className="flex items-center gap-3 ml-auto">
+          <button
+            data-testid="sound-toggle-btn"
+            onClick={onToggleSound}
+            title="Sound & desktop alerts on buy/sell"
+            className={`p-2 border rounded-sm transition-colors ${
+              soundOn ? "border-[#14F195] text-[#14F195]" : "border-[#232528] text-[#8A8F98] hover:text-white"
+            }`}
+          >
+            {soundOn ? <Bell size={15} /> : <BellOff size={15} />}
+          </button>
           {/* running status */}
           <div className="flex items-center gap-2 px-3 py-2 border border-[#232528] rounded-sm">
             <span className={`w-2 h-2 rounded-full ${state?.running ? "bg-[#14F195] live-dot" : "bg-[#8A8F98]"}`} />
@@ -572,6 +609,7 @@ const StrategyPanel = ({ state, refetch }) => {
   const [minMcap, setMinMcap] = useState(3000);
   const [minHolders, setMinHolders] = useState(10);
   const [flatExit, setFlatExit] = useState(1);
+  const [minVol, setMinVol] = useState(5000);
   const [gEnabled, setGEnabled] = useState(true);
   const [dayLimit, setDayLimit] = useState(0.05);
   const [cap, setCap] = useState(0.3);
@@ -586,6 +624,7 @@ const StrategyPanel = ({ state, refetch }) => {
       setMinMcap(s.min_mcap_usd ?? 3000);
       setMinHolders(s.min_holders ?? 10);
       setFlatExit(s.flat_exit_min ?? 1);
+      setMinVol(s.min_volume_usd ?? 5000);
       setGEnabled(g.enabled);
       setDayLimit(g.daily_loss_limit_sol);
       setCap(g.total_spend_cap_sol);
@@ -603,6 +642,7 @@ const StrategyPanel = ({ state, refetch }) => {
         min_mcap_usd: parseFloat(minMcap),
         min_holders: parseInt(minHolders, 10),
         flat_exit_min: parseFloat(flatExit),
+        min_volume_usd: parseFloat(minVol),
       });
       await api.setGuardrails({
         enabled: gEnabled,
@@ -635,6 +675,7 @@ const StrategyPanel = ({ state, refetch }) => {
           <NumField label="Min Market Cap" value={minMcap} onChange={setMinMcap} step="500" suffix="$" testid="tune-minmcap" />
           <NumField label="Min Holders" value={minHolders} onChange={setMinHolders} testid="tune-minholders" />
           <NumField label="Flat Exit (no move)" value={flatExit} onChange={setFlatExit} step="0.5" suffix="min" testid="tune-flatexit" />
+          <NumField label="Min 24h Volume" value={minVol} onChange={setMinVol} step="1000" suffix="$" testid="tune-minvol" />
         </div>
 
         <div className="border-t border-[#232528] pt-3 space-y-2.5">
@@ -679,6 +720,9 @@ const StrategyPanel = ({ state, refetch }) => {
 function App() {
   const qc = useQueryClient();
   const { copied, copy } = useCopy();
+  const [soundOn, setSoundOn] = useState(() => localStorage.getItem("ps_sound") === "1");
+  const seenTrades = useRef(null);
+  const modeRef = useRef(null);
 
   const state = useQuery({ queryKey: ["state"], queryFn: api.botState, refetchInterval: 3000 });
   const coins = useQuery({ queryKey: ["coins"], queryFn: () => api.coins(), refetchInterval: 3000 });
@@ -730,13 +774,43 @@ function App() {
     }
   };
 
+  const toggleSound = () => {
+    const next = !soundOn;
+    setSoundOn(next);
+    localStorage.setItem("ps_sound", next ? "1" : "0");
+    if (next) {
+      playBeep("BUY");
+      if (typeof Notification !== "undefined" && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
+      toast.success("Sound & desktop alerts ON");
+    } else {
+      toast.message("Alerts off");
+    }
+  };
+
+  useEffect(() => {
+    const list = trades.data?.trades || [];
+    const mode = state.data?.mode;
+    if (seenTrades.current === null || modeRef.current !== mode) {
+      seenTrades.current = new Set(list.map((t) => t.id));
+      modeRef.current = mode;
+      return;
+    }
+    const fresh = list.filter((t) => !seenTrades.current.has(t.id));
+    fresh.forEach((t) => {
+      seenTrades.current.add(t.id);
+      if (soundOn) { playBeep(t.side); desktopNotify(t); }
+    });
+  }, [trades.data, soundOn, state.data?.mode]);
+
   const st = state.data;
   const isReal = st?.mode === "real";
 
   return (
     <div className="App scanlines min-h-screen bg-[#0B0C0E] relative">
       <Toaster theme="dark" position="top-right" toastOptions={{ style: { fontFamily: "JetBrains Mono, monospace", background: "#111316", border: "1px solid #232528", color: "#fff" } }} />
-      <Header state={st} onToggle={onToggle} onMode={onMode} onRestart={onRestart} />
+      <Header state={st} onToggle={onToggle} onMode={onMode} onRestart={onRestart} soundOn={soundOn} onToggleSound={toggleSound} />
 
       <main className="px-4 lg:px-6 py-4 space-y-3 relative z-10 max-w-[1600px]">
         {isReal && st?.real_configured && (

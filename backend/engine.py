@@ -70,6 +70,7 @@ class Engine:
                 "min_mcap_usd": 3000,
                 "min_holders": 10,
                 "flat_exit_min": 1,
+                "min_volume_usd": 5000,
             },
             "guardrails": {
                 "enabled": True,
@@ -248,6 +249,9 @@ class Engine:
         min_mcap = self._strat().get("min_mcap_usd", 3000)
         if c["market_cap_usd"] < min_mcap:
             return False, f"mcap ${c['market_cap_usd']:.0f} < ${min_mcap:.0f}"
+        min_vol = self._strat().get("min_volume_usd", 0)
+        if c["volume_24h_usd"] < min_vol:
+            return False, f"vol ${c['volume_24h_usd']:.0f} < ${min_vol:.0f}"
         min_holders = self._strat().get("min_holders", 10)
         if c.get("holders", 0) < min_holders:
             return False, f"holders {c.get('holders', 0)} < {min_holders}"
