@@ -62,8 +62,45 @@ class Engine:
                 "bribe_fee": BRIBE_FEE,
                 "min_global_fees_sol": MIN_GLOBAL_FEES_SOL,
             },
+            "strategy": {
+                "take_profit": TAKE_PROFIT,
+                "stop_loss": STOP_LOSS,
+                "trade_size_sol": TRADE_SIZE_SOL,
+                "max_positions": 5,
+            },
+            "guardrails": {
+                "enabled": True,
+                "daily_loss_limit_sol": 0.05,
+                "total_spend_cap_sol": 0.5,
+            },
+            "spent_today_sol": 0.0,
+            "loss_today_sol": 0.0,
+            "total_spent_sol": 0.0,
+            "day": now().date().isoformat(),
         }
         self._tasks = []
+
+    def _strat(self):
+        return self.bot.get("strategy", {})
+
+    def _roll_day(self):
+        today = now().date().isoformat()
+        if self.bot.get("day") != today:
+            self.bot["day"] = today
+            self.bot["spent_today_sol"] = 0.0
+            self.bot["loss_today_sol"] = 0.0
+
+    def guardrail_block(self):
+        """Return a reason string if a spend guardrail should stop real buys."""
+        g = self.bot.get("guardrails", {})
+        if not g.get("enabled"):
+            return None
+        self._roll_day()
+        if self.bot["loss_today_sol"] >= g.get("daily_loss_limit_sol", 1e9):
+            return f"daily loss limit hit ({self.bot['loss_today_sol']:.3f}◎)"
+        if self.bot["total_spent_sol"] >= g.get("total_spend_cap_sol", 1e9):
+            return f"total spend cap hit ({self.bot['total_spent_sol']:.3f}◎)"
+        return None
 
     # ---------------- helpers ----------------
     def _fake_addr(self):
@@ -102,6 +139,7 @@ class Engine:
             "symbol": symbol,
             "image": real.get("image") if real else "",
             "creator": real.get("creator") if real else "",
+            "bonding_curve_key": real.get("bonding_curve_key") if real else "",
             "dev_sold": dev_sold,
             "dev_checked": dev_checked,
             "dev_attempts": 0,
@@ -224,10 +262,11 @@ class Engine:
                 continue
             change = (c["price"] - pos["entry_price"]) / pos["entry_price"]
             held = (now() - datetime.fromisoformat(pos["entry_time"])).total_seconds() / 60
+            s = self._strat()
             reason = None
-            if change >= TAKE_PROFIT:
+            if change >= s["take_profit"]:
                 reason = "take profit"
-            elif change <= STOP_LOSS:
+            elif change <= s["stop_loss"]:
                 reason = "stop loss"
             elif held >= MAX_HOLD_MIN and change < 0.02:
                 reason = "stagnant / time exit"
@@ -250,15 +289,18 @@ class Engine:
             if score > 3.5:
                 candidates.append((score, c, growth))
         candidates.sort(key=lambda x: x[0], reverse=True)
-        cost_usd = TRADE_SIZE_SOL * SOL_USD
+        s = self._strat()
+        cost_usd = s["trade_size_sol"] * SOL_USD
         for score, c, growth in candidates[:3]:
+            if len(self.positions) >= s["max_positions"]:
+                break
             if self.bot["paper_balance_usd"] < cost_usd:
                 break
             if random.random() < 0.55:  # bot is selective
                 await self._open(c, score, growth)
 
     async def _open(self, c, score, growth):
-        cost_usd = TRADE_SIZE_SOL * SOL_USD
+        cost_usd = self._strat()["trade_size_sol"] * SOL_USD
         self.bot["paper_balance_usd"] -= cost_usd
         qty = cost_usd / c["price"]
         pos = {
@@ -268,7 +310,7 @@ class Engine:
             "symbol": c["symbol"],
             "entry_price": c["price"],
             "entry_time": iso(now()),
-            "size_sol": TRADE_SIZE_SOL,
+            "size_sol": self._strat()["trade_size_sol"],
             "cost_usd": cost_usd,
             "qty": qty,
         }
@@ -330,15 +372,29 @@ class Engine:
         self.decisions = self.decisions[:40]
 
     # ---------------- REAL on-chain trading ----------------
+    async def _real_price(self, mint):
+        """Precise live USD price: on-chain bonding curve first, then DexScreener."""
+        c = self.coins.get(mint)
+        key = c.get("bonding_curve_key") if c else None
+        if not key:
+            pos = self.real_positions.get(mint)
+            key = pos.get("bonding_curve_key") if pos else None
+        if key:
+            st = await real_trader.bonding_curve_state(key)
+            if st and not st["complete"] and st["vtok"] > 0:
+                return (st["vsol"] / 1e9) / (st["vtok"] / 1e6) * SOL_USD
+        return await real_trader.token_price_usd(mint)
+
     async def tick_real(self):
         if not self.bot["running"] or self.bot["mode"] != "real":
             return
         if not real_trader.is_configured():
             return
+        s = self._strat()
         # ---- manage open real positions using REAL prices ----
         for mint in list(self.real_positions.keys()):
             pos = self.real_positions[mint]
-            cur_real = await real_trader.token_price_usd(mint)
+            cur_real = await self._real_price(mint)
             if cur_real is not None:
                 pos["cur_real"] = cur_real  # cache for views
             held = (now() - datetime.fromisoformat(pos["entry_time"])).total_seconds() / 60
@@ -346,21 +402,30 @@ class Engine:
             reason = None
             if entry_real and cur_real:
                 change = (cur_real - entry_real) / entry_real
-                if change >= TAKE_PROFIT:
+                if change >= s["take_profit"]:
                     reason = "take profit"
-                elif change <= STOP_LOSS:
+                elif change <= s["stop_loss"]:
                     reason = "stop loss"
                 elif held >= MAX_HOLD_MIN and change < 0.02:
                     reason = "time exit"
             else:
-                # no real price feed yet -> hold; only a long safety exit
                 if held >= 90:
                     reason = "safety exit (no live price)"
             if reason:
                 await self._real_sell(mint, reason, cur_real)
 
+        # ---- spend guardrails ----
+        block = self.guardrail_block()
+        if block:
+            self.bot["running"] = False
+            self._log_decision({"symbol": "BOT", "mint": ""}, "SKIP",
+                               f"GUARDRAIL: {block} — auto-paused")
+            await self.save()
+            return
+
         # ---- scan for real buys (ONLY genuine live coins) ----
-        cost_sol = TRADE_SIZE_SOL + 0.0002  # trade + est. fees
+        trade_size = s["trade_size_sol"]
+        cost_sol = trade_size + 0.0002  # trade + est. fees
         if self.bot["real_balance_sol"] < cost_sol:
             return
         candidates = []
@@ -377,31 +442,38 @@ class Engine:
                 candidates.append((score, c, growth))
         candidates.sort(key=lambda x: x[0], reverse=True)
         for score, c, growth in candidates[:1]:  # conservative: one real buy per tick
-            if len(self.real_positions) >= 5:
+            if len(self.real_positions) >= s["max_positions"]:
                 break
             await self._real_buy(c, growth)
 
     async def _real_buy(self, c, growth):
+        s = self._strat()
+        trade_size = s["trade_size_sol"]
         try:
-            sig = await real_trader.execute_trade("buy", c["mint"], TRADE_SIZE_SOL, True)
+            sig = await real_trader.execute_trade("buy", c["mint"], trade_size, True)
         except Exception as e:
             self._log_decision(c, "SKIP", f"real buy failed: {str(e)[:80]}")
             print("real buy error:", e)
             return
-        entry_real = await real_trader.token_price_usd(c["mint"])
+        # track spend for guardrails
+        self._roll_day()
+        self.bot["spent_today_sol"] += trade_size
+        self.bot["total_spent_sol"] += trade_size
+        entry_real = await self._real_price(c["mint"])
         self.real_positions[c["mint"]] = {
             "id": str(uuid.uuid4()),
             "mint": c["mint"], "name": c["name"], "symbol": c["symbol"],
+            "bonding_curve_key": c.get("bonding_curve_key", ""),
             "entry_price": c["price"], "entry_price_real": entry_real,
             "cur_real": entry_real, "entry_time": iso(now()),
-            "size_sol": TRADE_SIZE_SOL, "cost_usd": TRADE_SIZE_SOL * SOL_USD,
-            "qty": TRADE_SIZE_SOL * SOL_USD / c["price"], "sig": sig,
+            "size_sol": trade_size, "cost_usd": trade_size * SOL_USD,
+            "qty": trade_size * SOL_USD / c["price"], "sig": sig,
         }
         await self.db.real_positions.update_one(
             {"_id": c["mint"]}, {"$set": self.real_positions[c["mint"]]}, upsert=True)
-        reason = (f"REAL buy {TRADE_SIZE_SOL}◎ · vol {c['vol_spike']:.1f}x, "
+        reason = (f"REAL buy {trade_size}◎ · vol {c['vol_spike']:.1f}x, "
                   f"mcap +{growth*100:.0f}%, fees {c['global_fees_paid_sol']:.2f}◎, dev sold")
-        await self._record_trade(c, "BUY", c["price"], TRADE_SIZE_SOL * SOL_USD,
+        await self._record_trade(c, "BUY", c["price"], trade_size * SOL_USD,
                                  reason, 0, mode="real", sig=sig)
         self._log_decision(c, "BUY", reason)
 
@@ -427,6 +499,9 @@ class Engine:
             pnl_pct = 0.0
             proceeds = pos["cost_usd"]
         est_pnl = proceeds - pos["cost_usd"]
+        if est_pnl < 0:  # track realized loss for the daily guardrail
+            self._roll_day()
+            self.bot["loss_today_sol"] += abs(est_pnl) / SOL_USD
         await self._record_trade(c or {"mint": mint, "name": pos["name"], "symbol": pos["symbol"]},
                                  "SELL", cur_real or pos["entry_price"], proceeds,
                                  f"{reason} ({pnl_pct:+.0f}%)", est_pnl, pnl_pct,
@@ -553,6 +628,7 @@ class Engine:
             "symbol": msg.get("symbol"),
             "marketCapSol": msg.get("marketCapSol"),
             "creator": msg.get("traderPublicKey"),
+            "bonding_curve_key": msg.get("bondingCurveKey"),
             "socials": socials,
             "image": image,
         }

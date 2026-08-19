@@ -37,6 +37,19 @@ class TradeReq(BaseModel):
     mint: str
 
 
+class StrategyReq(BaseModel):
+    take_profit: float
+    stop_loss: float
+    trade_size_sol: float
+    max_positions: int
+
+
+class GuardrailReq(BaseModel):
+    enabled: bool
+    daily_loss_limit_sol: float
+    total_spend_cap_sol: float
+
+
 @api_router.get("/")
 async def root():
     return {"message": "pump.fun bot online"}
@@ -99,6 +112,32 @@ async def bot_mode(req: ModeReq):
     engine.bot["mode"] = req.mode
     await engine.save()
     return {"mode": engine.bot["mode"]}
+
+
+@api_router.post("/bot/strategy")
+async def set_strategy(req: StrategyReq):
+    s = {
+        "take_profit": max(0.02, min(req.take_profit, 10)),
+        "stop_loss": -abs(req.stop_loss) if req.stop_loss > 0 else max(req.stop_loss, -0.95),
+        "trade_size_sol": max(0.001, min(req.trade_size_sol, 100)),
+        "max_positions": max(1, min(int(req.max_positions), 20)),
+    }
+    engine.bot["strategy"] = s
+    engine.bot["settings"]["trade_size_sol"] = s["trade_size_sol"]
+    await engine.save()
+    return {"ok": True, "strategy": s}
+
+
+@api_router.post("/bot/guardrails")
+async def set_guardrails(req: GuardrailReq):
+    g = {
+        "enabled": req.enabled,
+        "daily_loss_limit_sol": max(0.0, req.daily_loss_limit_sol),
+        "total_spend_cap_sol": max(0.0, req.total_spend_cap_sol),
+    }
+    engine.bot["guardrails"] = g
+    await engine.save()
+    return {"ok": True, "guardrails": g}
 
 
 @api_router.post("/bot/restart")
@@ -196,7 +235,7 @@ async def real_sell(req: TradeReq):
         raise HTTPException(400, "real wallet not configured")
     if req.mint not in engine.real_positions:
         raise HTTPException(404, "no open real position for this mint")
-    cur = await real_trader.token_price_usd(req.mint)
+    cur = await engine._real_price(req.mint)
     await engine._real_sell(req.mint, "manual sell", cur)
     return {"ok": True, "closed": req.mint not in engine.real_positions}
 

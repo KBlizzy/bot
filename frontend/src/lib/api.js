@@ -16,6 +16,8 @@ export const api = {
   depositSim: (amount_sol) => axios.post(`${API}/wallet/deposit_sim`, { address: "self", amount_sol }).then((r) => r.data),
   realBuy: (mint) => axios.post(`${API}/real/buy`, { mint }).then((r) => r.data),
   realSell: (mint) => axios.post(`${API}/real/sell`, { mint }).then((r) => r.data),
+  setStrategy: (s) => axios.post(`${API}/bot/strategy`, s).then((r) => r.data),
+  setGuardrails: (g) => axios.post(`${API}/bot/guardrails`, g).then((r) => r.data),
 };
 
 export const fmtUsd = (n) =>

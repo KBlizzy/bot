@@ -5,7 +5,7 @@ import { Toaster, toast } from "sonner";
 import {
   Activity, Play, Pause, RotateCcw, Copy, Check, Twitter, Send, Globe,
   TrendingUp, TrendingDown, Zap, Radio, Wallet, ArrowUpRight, Bot, Crosshair,
-  AlertTriangle, Flame,
+  AlertTriangle, Flame, Sliders,
 } from "lucide-react";
 import { api, fmtUsd, fmtMcap, fmtPct, fmtSol, shortCa } from "@/lib/api";
 import { Sparkline } from "@/components/Sparkline";
@@ -539,22 +539,119 @@ const RealWallet = ({ state, copy, refetch }) => {
   );
 };
 
-/* ================= SETTINGS STRIP ================= */
-const Settings = ({ s }) => (
-  <div className="panel rounded-sm px-4 py-3" data-testid="settings-strip">
-    <div className="flex items-center gap-2 mb-2">
-      <Zap size={14} className="text-[#9945FF]" />
-      <span className="font-head text-sm">BOT CONFIG</span>
-    </div>
-    <div className="grid grid-cols-2 gap-y-2 gap-x-4 font-num text-[11px]">
-      <div className="flex justify-between"><span className="text-[#8A8F98]">Trade size</span><span>{s?.trade_size_sol} ◎</span></div>
-      <div className="flex justify-between"><span className="text-[#8A8F98]">Slippage</span><span>{s?.slippage_pct}%</span></div>
-      <div className="flex justify-between"><span className="text-[#8A8F98]">Priority</span><span>{s?.priority_fee}</span></div>
-      <div className="flex justify-between"><span className="text-[#8A8F98]">Bribe</span><span>{s?.bribe_fee}</span></div>
-      <div className="flex justify-between col-span-2"><span className="text-[#8A8F98]">Min fees filter</span><span>≥ {s?.min_global_fees_sol} ◎ + social + new</span></div>
+/* ================= STRATEGY TUNER + GUARDRAILS ================= */
+const NumField = ({ label, value, onChange, step = "1", suffix, testid }) => (
+  <div>
+    <div className="font-num text-[9px] uppercase tracking-wider text-[#8A8F98] mb-1">{label}</div>
+    <div className="flex items-center border border-[#232528] rounded-sm bg-[#0B0C0E] focus-within:border-[#9945FF]">
+      <input data-testid={testid} type="number" step={step} value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-transparent px-2.5 py-1.5 font-num text-xs outline-none" />
+      {suffix && <span className="px-2 font-num text-[10px] text-[#8A8F98]">{suffix}</span>}
     </div>
   </div>
 );
+
+const StrategyPanel = ({ state, refetch }) => {
+  const s = state?.strategy;
+  const g = state?.guardrails;
+  const [tp, setTp] = useState(25);
+  const [sl, setSl] = useState(15);
+  const [size, setSize] = useState(0.01);
+  const [maxPos, setMaxPos] = useState(5);
+  const [gEnabled, setGEnabled] = useState(true);
+  const [dayLimit, setDayLimit] = useState(0.05);
+  const [cap, setCap] = useState(0.3);
+  const seeded = useRef(false);
+
+  useEffect(() => {
+    if (s && g && !seeded.current) {
+      setTp((s.take_profit * 100).toFixed(0));
+      setSl((Math.abs(s.stop_loss) * 100).toFixed(0));
+      setSize(s.trade_size_sol);
+      setMaxPos(s.max_positions);
+      setGEnabled(g.enabled);
+      setDayLimit(g.daily_loss_limit_sol);
+      setCap(g.total_spend_cap_sol);
+      seeded.current = true;
+    }
+  }, [s, g]);
+
+  const save = async () => {
+    try {
+      await api.setStrategy({
+        take_profit: parseFloat(tp) / 100,
+        stop_loss: parseFloat(sl) / 100,
+        trade_size_sol: parseFloat(size),
+        max_positions: parseInt(maxPos, 10),
+      });
+      await api.setGuardrails({
+        enabled: gEnabled,
+        daily_loss_limit_sol: parseFloat(dayLimit),
+        total_spend_cap_sol: parseFloat(cap),
+      });
+      toast.success("Strategy & limits saved");
+      refetch();
+    } catch (e) {
+      toast.error("Save failed");
+    }
+  };
+
+  const spent = state?.total_spent_sol || 0;
+  const lossToday = state?.loss_today_sol || 0;
+  const capPct = cap > 0 ? Math.min(100, (spent / cap) * 100) : 0;
+
+  return (
+    <div className="panel rounded-sm" data-testid="strategy-panel">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-[#232528]">
+        <Sliders size={15} className="text-[#9945FF]" />
+        <span className="font-head text-sm">STRATEGY & LIMITS</span>
+      </div>
+      <div className="p-4 space-y-4">
+        <div className="grid grid-cols-2 gap-2.5">
+          <NumField label="Take Profit" value={tp} onChange={setTp} suffix="%" testid="tune-tp" />
+          <NumField label="Stop Loss" value={sl} onChange={setSl} suffix="%" testid="tune-sl" />
+          <NumField label="Trade Size" value={size} onChange={setSize} step="0.001" suffix="◎" testid="tune-size" />
+          <NumField label="Max Positions" value={maxPos} onChange={setMaxPos} testid="tune-maxpos" />
+        </div>
+
+        <div className="border-t border-[#232528] pt-3 space-y-2.5">
+          <label className="flex items-center justify-between cursor-pointer">
+            <span className="font-num text-[10px] uppercase tracking-wider text-[#8A8F98]">Spend Guardrails</span>
+            <button data-testid="toggle-guardrails" onClick={() => setGEnabled(!gEnabled)}
+              className={`w-9 h-5 rounded-full transition-colors relative ${gEnabled ? "bg-[#14F195]" : "bg-[#232528]"}`}>
+              <span className={`absolute top-0.5 w-4 h-4 bg-black rounded-full transition-all ${gEnabled ? "left-[18px]" : "left-0.5"}`} />
+            </button>
+          </label>
+          <div className="grid grid-cols-2 gap-2.5">
+            <NumField label="Daily Loss Limit" value={dayLimit} onChange={setDayLimit} step="0.01" suffix="◎" testid="tune-dayloss" />
+            <NumField label="Total Spend Cap" value={cap} onChange={setCap} step="0.01" suffix="◎" testid="tune-cap" />
+          </div>
+          <div>
+            <div className="flex items-center justify-between font-num text-[10px] text-[#8A8F98]">
+              <span>Spent {spent.toFixed(3)}◎ / {Number(cap).toFixed(2)}◎</span>
+              <span className={lossToday > 0 ? "text-[#FF3B30]" : ""}>loss today {lossToday.toFixed(3)}◎</span>
+            </div>
+            <div className="h-1.5 bg-[#232528] rounded-full mt-1 overflow-hidden">
+              <div className="h-full bg-[#9945FF]" style={{ width: `${capPct}%`, transition: "width 0.4s ease" }} />
+            </div>
+          </div>
+        </div>
+
+        <button data-testid="save-strategy-btn" onClick={save}
+          className="w-full py-2 bg-[#9945FF] text-white font-num text-xs font-semibold rounded-sm hover:bg-[#a95cff] transition-colors">
+          SAVE STRATEGY
+        </button>
+
+        <div className="grid grid-cols-3 gap-2 border-t border-[#232528] pt-3 font-num text-[10px]">
+          <div><span className="text-[#8A8F98] block">Slippage</span>{state?.settings?.slippage_pct}%</div>
+          <div><span className="text-[#8A8F98] block">Priority</span>{state?.settings?.priority_fee}</div>
+          <div><span className="text-[#8A8F98] block">Bribe</span>{state?.settings?.bribe_fee}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 /* ================= APP ================= */
 function App() {
@@ -625,11 +722,8 @@ function App() {
             <Scanner coins={coins.data?.coins || []} copy={copy} copied={copied} />
           </div>
           <div className="lg:col-span-4 space-y-3">
-            {isReal ? (
-              <RealWallet state={st} copy={copy} refetch={refetchAll} />
-            ) : (
-              <Settings s={st?.settings} />
-            )}
+            {isReal && <RealWallet state={st} copy={copy} refetch={refetchAll} />}
+            <StrategyPanel state={st} refetch={refetchAll} />
             <Decisions decisions={decisions.data?.decisions || []} />
           </div>
         </div>

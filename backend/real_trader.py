@@ -6,6 +6,7 @@ Requested policy: 0.01 SOL/trade, 25% slippage, 0.0001 priority fee, 0 jito tip.
 """
 import asyncio
 import os
+import struct
 
 import httpx
 from solders.keypair import Keypair
@@ -57,6 +58,28 @@ async def get_balance_sol():
             return r.value / LAMPORTS
     except Exception as e:
         print("balance error:", e)
+        return None
+
+
+async def bonding_curve_state(bc_key):
+    """Read the pump.fun bonding-curve account and return live reserves.
+    Layout after 8-byte anchor discriminator: 5x u64 + bool(complete)."""
+    if not bc_key:
+        return None
+    try:
+        async with AsyncClient(rpc_url()) as rpc:
+            resp = await rpc.get_account_info(Pubkey.from_string(bc_key))
+            acc = resp.value
+            if acc is None:
+                return None
+            data = bytes(acc.data)
+            if len(data) < 8 + 40 + 1:
+                return None
+            vtok, vsol, rtok, rsol, supply = struct.unpack_from("<QQQQQ", data, 8)
+            complete = data[8 + 40] != 0
+            return {"vtok": vtok, "vsol": vsol, "complete": complete}
+    except Exception as e:
+        print("bonding-curve error:", str(e)[:100])
         return None
 
 
