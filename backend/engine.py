@@ -67,6 +67,8 @@ class Engine:
                 "stop_loss": STOP_LOSS,
                 "trade_size_sol": TRADE_SIZE_SOL,
                 "max_positions": 5,
+                "min_mcap_usd": 3000,
+                "min_holders": 10,
             },
             "guardrails": {
                 "enabled": True,
@@ -242,6 +244,12 @@ class Engine:
             return False, "no social link"
         if c["global_fees_paid_sol"] < MIN_GLOBAL_FEES_SOL:
             return False, f"fees {c['global_fees_paid_sol']:.2f} < 0.5"
+        min_mcap = self._strat().get("min_mcap_usd", 3000)
+        if c["market_cap_usd"] < min_mcap:
+            return False, f"mcap ${c['market_cap_usd']:.0f} < ${min_mcap:.0f}"
+        min_holders = self._strat().get("min_holders", 10)
+        if c.get("holders", 0) < min_holders:
+            return False, f"holders {c.get('holders', 0)} < {min_holders}"
         if not c.get("dev_sold"):
             return False, ("dev still holds supply" if c.get("dev_checked")
                            else "dev holdings unverified")
@@ -549,10 +557,15 @@ class Engine:
 
     # ---------------- persistence ----------------
     async def load(self):
+        defaults_strategy = dict(self.bot["strategy"])
+        defaults_guardrails = dict(self.bot["guardrails"])
         st = await self.db.bot_state.find_one({"_id": "singleton"})
         if st:
             st.pop("_id", None)
             self.bot.update(st)
+        # backfill any missing strategy/guardrail keys added in later versions
+        self.bot["strategy"] = {**defaults_strategy, **self.bot.get("strategy", {})}
+        self.bot["guardrails"] = {**defaults_guardrails, **self.bot.get("guardrails", {})}
         async for doc in self.db.real_positions.find():
             doc.pop("_id", None)
             if doc.get("mint"):

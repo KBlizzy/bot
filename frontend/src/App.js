@@ -218,6 +218,7 @@ const Scanner = ({ coins, copy, copied }) => {
               <th className="px-2 py-2 font-medium text-right">Chg</th>
               <th className="px-2 py-2 font-medium text-right">Vol</th>
               <th className="px-2 py-2 font-medium text-right">Fees ◎</th>
+              <th className="px-2 py-2 font-medium text-right">Hldrs</th>
               <th className="px-2 py-2 font-medium text-right">Age</th>
               <th className="px-3 py-2 font-medium text-right">Trend</th>
             </tr>
@@ -263,6 +264,9 @@ const Scanner = ({ coins, copy, copied }) => {
                 <td className="px-2 py-2.5 text-right font-num text-xs text-[#8A8F98]">{fmtMcap(c.volume_24h_usd)}</td>
                 <td className={`px-2 py-2.5 text-right font-num text-xs ${c.global_fees_paid_sol >= 0.5 ? "text-white" : "text-[#4a4e54]"}`}>
                   {c.global_fees_paid_sol.toFixed(2)}
+                </td>
+                <td className={`px-2 py-2.5 text-right font-num text-xs ${c.holders >= 10 ? "text-white" : "text-[#4a4e54]"}`}>
+                  {c.holders}
                 </td>
                 <td className="px-2 py-2.5 text-right font-num text-[10px] text-[#8A8F98]">
                   {c.age_min < 60 ? `${c.age_min.toFixed(0)}m` : `${(c.age_min / 60).toFixed(1)}h`}
@@ -559,6 +563,8 @@ const StrategyPanel = ({ state, refetch }) => {
   const [sl, setSl] = useState(15);
   const [size, setSize] = useState(0.01);
   const [maxPos, setMaxPos] = useState(5);
+  const [minMcap, setMinMcap] = useState(3000);
+  const [minHolders, setMinHolders] = useState(10);
   const [gEnabled, setGEnabled] = useState(true);
   const [dayLimit, setDayLimit] = useState(0.05);
   const [cap, setCap] = useState(0.3);
@@ -570,6 +576,8 @@ const StrategyPanel = ({ state, refetch }) => {
       setSl((Math.abs(s.stop_loss) * 100).toFixed(0));
       setSize(s.trade_size_sol);
       setMaxPos(s.max_positions);
+      setMinMcap(s.min_mcap_usd ?? 3000);
+      setMinHolders(s.min_holders ?? 10);
       setGEnabled(g.enabled);
       setDayLimit(g.daily_loss_limit_sol);
       setCap(g.total_spend_cap_sol);
@@ -584,6 +592,8 @@ const StrategyPanel = ({ state, refetch }) => {
         stop_loss: parseFloat(sl) / 100,
         trade_size_sol: parseFloat(size),
         max_positions: parseInt(maxPos, 10),
+        min_mcap_usd: parseFloat(minMcap),
+        min_holders: parseInt(minHolders, 10),
       });
       await api.setGuardrails({
         enabled: gEnabled,
@@ -613,6 +623,8 @@ const StrategyPanel = ({ state, refetch }) => {
           <NumField label="Stop Loss" value={sl} onChange={setSl} suffix="%" testid="tune-sl" />
           <NumField label="Trade Size" value={size} onChange={setSize} step="0.001" suffix="◎" testid="tune-size" />
           <NumField label="Max Positions" value={maxPos} onChange={setMaxPos} testid="tune-maxpos" />
+          <NumField label="Min Market Cap" value={minMcap} onChange={setMinMcap} step="500" suffix="$" testid="tune-minmcap" />
+          <NumField label="Min Holders" value={minHolders} onChange={setMinHolders} testid="tune-minholders" />
         </div>
 
         <div className="border-t border-[#232528] pt-3 space-y-2.5">

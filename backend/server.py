@@ -42,6 +42,8 @@ class StrategyReq(BaseModel):
     stop_loss: float
     trade_size_sol: float
     max_positions: int
+    min_mcap_usd: float = 3000
+    min_holders: int = 10
 
 
 class GuardrailReq(BaseModel):
@@ -121,6 +123,8 @@ async def set_strategy(req: StrategyReq):
         "stop_loss": -abs(req.stop_loss) if req.stop_loss > 0 else max(req.stop_loss, -0.95),
         "trade_size_sol": max(0.001, min(req.trade_size_sol, 100)),
         "max_positions": max(1, min(int(req.max_positions), 20)),
+        "min_mcap_usd": max(0.0, req.min_mcap_usd),
+        "min_holders": max(0, int(req.min_holders)),
     }
     engine.bot["strategy"] = s
     engine.bot["settings"]["trade_size_sol"] = s["trade_size_sol"]
