@@ -599,7 +599,7 @@ const NumField = ({ label, value, onChange, step = "1", suffix, testid }) => (
   </div>
 );
 
-const StrategyPanel = ({ state, refetch }) => {
+const StrategyPanel = ({ state, refetch, onResetSpend }) => {
   const s = state?.strategy;
   const g = state?.guardrails;
   const [tp, setTp] = useState(25);
@@ -693,7 +693,11 @@ const StrategyPanel = ({ state, refetch }) => {
           <div>
             <div className="flex items-center justify-between font-num text-[10px] text-[#8A8F98]">
               <span>Spent {spent.toFixed(3)}◎ / {Number(cap).toFixed(2)}◎</span>
-              <span className={lossToday > 0 ? "text-[#FF3B30]" : ""}>loss today {lossToday.toFixed(3)}◎</span>
+              <div className="flex items-center gap-2">
+                <span className={lossToday > 0 ? "text-[#FF3B30]" : ""}>loss today {lossToday.toFixed(3)}◎</span>
+                <button data-testid="reset-spend-btn" onClick={onResetSpend}
+                  className="text-[#9945FF] hover:underline">reset</button>
+              </div>
             </div>
             <div className="h-1.5 bg-[#232528] rounded-full mt-1 overflow-hidden">
               <div className="h-full bg-[#9945FF]" style={{ width: `${capPct}%`, transition: "width 0.4s ease" }} />
@@ -735,6 +739,13 @@ function App() {
     .forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
 
   const onToggle = async () => {
+    // if a spend guardrail is tripped, starting will instantly re-pause — explain instead
+    if (!st?.running && st?.guardrail_status) {
+      toast.error("Can't start scouting", {
+        description: `${st.guardrail_status}. Reset spend or raise your limits below, then try again.`,
+      });
+      return;
+    }
     const r = await api.toggle();
     toast[r.running ? "success" : "message"](r.running ? "Bot scouting" : "Bot paused");
     refetchAll();
@@ -772,6 +783,11 @@ function App() {
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Close all failed");
     }
+  };
+  const onResetSpend = async () => {
+    await api.resetSpend();
+    toast.success("Spend & loss counters reset", { description: "You can scout again" });
+    refetchAll();
   };
 
   const toggleSound = () => {
@@ -821,6 +837,18 @@ function App() {
             </span>
           </div>
         )}
+        {st?.guardrail_status && (
+          <div className="panel rounded-sm border-[#FFB020]/50 bg-[#FFB020]/[0.08] px-4 py-2.5 flex items-center gap-3" data-testid="guardrail-banner">
+            <AlertTriangle size={15} className="text-[#FFB020]" />
+            <span className="font-num text-xs text-[#FFB020]">
+              Bot auto-paused — {st.guardrail_status}. Reset your spend/loss counters or raise limits to scout again.
+            </span>
+            <button data-testid="banner-reset-spend" onClick={onResetSpend}
+              className="ml-auto font-num text-[10px] px-3 py-1.5 rounded-sm bg-[#FFB020] text-black font-semibold hover:opacity-90">
+              RESET LIMITS
+            </button>
+          </div>
+        )}
         <StatsRow state={st} trades={trades.data} />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
@@ -829,7 +857,7 @@ function App() {
           </div>
           <div className="lg:col-span-4 space-y-3">
             {isReal && <RealWallet state={st} copy={copy} refetch={refetchAll} />}
-            <StrategyPanel state={st} refetch={refetchAll} />
+            <StrategyPanel state={st} refetch={refetchAll} onResetSpend={onResetSpend} />
             <Decisions decisions={decisions.data?.decisions || []} />
           </div>
         </div>

@@ -99,6 +99,7 @@ async def bot_state():
         "real_pubkey": real_trader.public_key(),
         "real_rpc": real_trader.rpc_url(),
         "real_open_positions": len(engine.real_positions),
+        "guardrail_status": engine.guardrail_block(),
     }
 
 
@@ -146,6 +147,15 @@ async def set_guardrails(req: GuardrailReq):
     engine.bot["guardrails"] = g
     await engine.save()
     return {"ok": True, "guardrails": g}
+
+
+@api_router.post("/bot/reset_spend")
+async def reset_spend():
+    engine.bot["spent_today_sol"] = 0.0
+    engine.bot["loss_today_sol"] = 0.0
+    engine.bot["total_spent_sol"] = 0.0
+    await engine.save()
+    return {"ok": True}
 
 
 @api_router.post("/bot/restart")
