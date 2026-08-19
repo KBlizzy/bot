@@ -1,0 +1,67 @@
+{
+  "theme": "dark",
+  "typography": {
+    "headings": "Azeret Mono, monospace",
+    "body": "Inter, sans-serif",
+    "numbers": "JetBrains Mono, monospace",
+    "rules": "DO NOT use Inter for headings. Headings must use Azeret Mono. For all financial metrics, prices, and tickers, use JetBrains Mono to ensure tabular alignment (tnum). Add these fonts via Google Fonts in index.html."
+  },
+  "colors": {
+    "background_page": "#0B0C0E",
+    "background_panel": "#111316",
+    "borders": "#232528",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#8A8F98",
+    "accents": {
+      "profit": "#14F195",
+      "loss": "#FF3B30",
+      "paper_mode": "#14F195",
+      "real_mode": "#FF3B30",
+      "solana_purple": "#9945FF"
+    },
+    "rules": "Implement Terminal Brutalism. Do not use full-screen gradients. Limit saturated colors strictly to interactive elements, live value flashes, and primary signals. NEVER use pure generic gray."
+  },
+  "layouts": {
+    "mode": "High Density Grid (Mode B) - Terminal Brutalism",
+    "structure": "grid-cols-1 md:grid-cols-12 with tight gaps (gap-2 or gap-4).",
+    "borders": "border-collapse style layout. Expose the skeleton. Make the grid visible with 1px border-border/40 hairlines."
+  },
+  "components": {
+    "cards": "Cardless or flat solid surfaces with 1px subtle borders (border-[#232528]). NEVER use soft elevation shadows. Use sharp edges or max 4px radius.",
+    "buttons": "Sharp, rectangular buttons with interaction animations. For primary actions, use neon borders with subtle inner glows.",
+    "headers": "Solid backgrounds (bg-[#0B0C0E]) with a hard bottom border. CRITICAL: DO NOT use complete transparent backgrounds in headers or dropdowns.",
+    "tables": "High density, 1px hairlines between rows. Monospace fonts for all metrics.",
+    "toggles": "Mode switcher must be highly prominent. Paper mode (Neon Green accents) vs Real mode (Electric Red accents/warning aesthetic)."
+  },
+  "visual_enhancers": {
+    "motion": "Use flash-on-change animations (fading over ~600ms) for price updates to mimic a live terminal.",
+    "textures": "Subtle technical details like visible grid lines or a very faint CRT scanline overlay."
+  },
+  "images": {
+    "bot_avatar": {
+      "url": "https://images.unsplash.com/photo-1715615751025-e7ebe7f47eea?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzB8MHwxfHNlYXJjaHwzfHxoYWNrZXIlMjBhdmF0YXIlMjBuZW9uJTIwc3R5bGl6ZWR8ZW58MHx8fHwxNzg3MTU4MjU5fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Neon hacker avatar for 'Scouted Wallets' or the AI Bot profile image"
+    },
+    "bot_avatar_alt": {
+      "url": "https://images.unsplash.com/photo-1595948797063-8e0b33ab7461?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzB8MHwxfHNlYXJjaHwxfHxoYWNrZXIlMjBhdmF0YXIlMjBuZW9uJTIwc3R5bGl6ZWR8ZW58MHx8fHwxNzg3MTU4MjU5fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Alternate neon mask avatar for copy-traded entities"
+    }
+  },
+  "accessibility": {
+    "contrast": "Ensure all text meets APCA/WCAG standards against dark backgrounds. Use Text Shadow on colored badges.",
+    "testing": "CRITICAL: All interactive and key informational elements MUST include a `data-testid` attribute (e.g., data-testid='buy-button', data-testid='paper-balance')."
+  },
+  "instructions_to_main_agent": [
+    "You have .js files not .tsx files, so write all React components in .js/.jsx syntax.",
+    "Implement a dark theme by updating index.css variables for dark background (#0B0C0E) and applying the 'dark' class.",
+    "Use Phosphor Icons (@phosphor-icons/react) or Lucide (lucide-react) for terminal icons.",
+    "Implement Sonner for toast notifications (e.g., 'Trade Executed', 'Mode Switched').",
+    "Build a layout mapping a dense trading terminal: Live Scanner, AI Decisions, Wallet Card, Position List, Bot controls.",
+    "BUSINESS LOGIC 1: Coins must show Social Links and >= 0.5 Global Fees Paid. Make Contract Address (CA) copyable.",
+    "BUSINESS LOGIC 2: Paper wallet starts at $20. Include a 'Restart to $20' button.",
+    "BUSINESS LOGIC 3: Trade history must show buys/sells up to 24 hours.",
+    "BUSINESS LOGIC 4: Real Trading mode allows deposit/withdraw of real SOL and displays real wallet balance. Clearly mark this mode as dangerous/live (red UI accents).",
+    "BUSINESS LOGIC 5: Display bot trade settings in the UI: Trade 0.01 at a time, 25% slippage, .0001 priority, 0 bribe."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": "You tend to converge toward generic outputs. Avoid this. Create depth through layered design elements with z-index hierarchy. DO NOT use generic centered layouts. DO NOT apply `transition: all`. You MUST NOT center align the app container. Add transitions for specific interactive elements excluding transforms. Never use AI assistant emoji characters for icons. Prioritize existing components from src/components/ui. Use sonner for toasts."
+}

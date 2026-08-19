@@ -1,0 +1,39 @@
+{
+  "summary": "Full backend + frontend testing of PumpScout paper-trading MVP. 15/16 backend pytest tests pass (1 flaky failure due to parallel test race on POST /api/bot/mode — not a product bug). Frontend UI fully functional: dashboard loads, stat tiles, live scanner with 100+ coins including LIVE PumpPortal ingestion, filter tabs (all/eligible/new) filter correctly, copy CA works, bot toggle & reset $20 work, paper/real mode switch works, real wallet simulation shell (deposit_sim, withdraw ok/insufficient) works with simulated toasts, positions & trade history tabs render rows, decisions and scouted wallets feeds populate. Bot auto-trading verified: buys have reason string containing 'fees' and 'social' as required by eligibility filter (has_social AND global_fees_paid_sol>=0.5).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A - test-only", "issue": "test_mode_switch fails intermittently under pytest-xdist parallel execution because test_bot_generates_trades runs concurrently and forces mode back to 'paper'. Not a product bug; would be resolved by running mode tests serially or with a per-test lock."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "useCopy hook / navigator.clipboard.writeText", "issue": "Clipboard.writeText throws NotAllowedError in some sandboxed iframe contexts (observed 'Failed to execute writeText on Clipboard: Write permission denied' triggering React dev-server error overlay). Should be wrapped in try/catch with a fallback (document.execCommand('copy') or graceful toast).", "selector": "[data-testid^=\"copy-ca-\"], [data-testid=\"copy-deposit-addr\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Wrap navigator.clipboard.writeText in try/catch inside useCopy() in /app/frontend/src/App.js to avoid Uncaught runtime error overlay when clipboard permission is denied (also add execCommand fallback)."
+  ],
+  "critical_code_review_comments": [
+    "engine.py stores bot state in-memory and persists via engine.save() — good. However on process restart, self.coins/positions are empty until seed runs; positions dict is not persisted. If backend restarts, open paper positions are lost silently. Consider persisting positions collection.",
+    "server.py mounts CORS middleware AFTER app.include_router — order is fine with Starlette but explicit ordering recommended.",
+    "engine.tick_bot random.random() < 0.55 randomness inside otherwise-deterministic tick — acceptable for demo; document that reason strings include 'fees' and 'social' which the request specifically asserted.",
+    "Frontend App.js is ~570 lines — could be split (Scanner, RealWallet, PositionsAndTrades) into separate files for maintainability but not blocking."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (created)",
+    "/app/test_reports/pytest/pytest_results.xml (generated)"
+  ],
+  "success_rate": {"backend": "94% (15/16, 1 race-condition test issue)", "frontend": "100% of required flows"},
+  "seed_data_creation": "None — engine.seed() auto-seeds ~30 coins and 12 wallets on startup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend at https://pump-scout-ai.preview.emergentagent.com/api. Bot runs auto every 4s in paper mode. If re-running backend_test.py, add `-p no:xdist` or use `-n 0` to avoid the mode-switch race between TestBotControls and TestAutoTrading. Real wallet endpoints are intentionally simulated (returns {simulated: true}). PumpPortal websocket successfully ingests LIVE coins in this environment (visible in scanner with LIVE tag).",
+  "rca_of_the_issue": "Clipboard permission error: navigator.clipboard.writeText() requires secure context + user activation and may throw NotAllowedError in iframe/preview sandboxes. Reproduction: click any copy-ca-* button in a sandboxed preview → React dev error overlay appears, blocking subsequent clicks. Mitigation: try { await navigator.clipboard.writeText(text) } catch { /* fallback using textarea + execCommand('copy') */ } inside useCopy()."
+}

@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0B0C0E;
+  --panel: #111316;
+  --border: #232528;
+  --txt: #FFFFFF;
+  --txt2: #8A8F98;
+  --profit: #14F195;
+  --loss: #FF3B30;
+  --sol: #9945FF;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--txt);
+  font-family: "Inter", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-head { font-family: "Azeret Mono", monospace; letter-spacing: -0.02em; }
+.font-num  { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+/* faint scanline overlay */
+.scanlines::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.014) 0px,
+    rgba(255,255,255,0.014) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* price flash animation */
+@keyframes flashUp { 0% { color: var(--profit); } 100% { color: inherit; } }
+@keyframes flashDn { 0% { color: var(--loss); } 100% { color: inherit; } }
+.flash-up { animation: flashUp 0.6s ease-out; }
+.flash-dn { animation: flashDn 0.6s ease-out; }
+
+@keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+.live-dot { animation: pulseDot 1.4s ease-in-out infinite; }
+
+@keyframes rowIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.row-in { animation: rowIn 0.35s ease-out; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0B0C0E; }
+::-webkit-scrollbar-thumb { background: #2c2f33; border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: #3a3e44; }
+
+::selection { background: var(--sol); color: #fff; }
+
+.tab-active { color: #fff; border-bottom: 2px solid var(--profit); }
