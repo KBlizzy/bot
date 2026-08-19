@@ -69,6 +69,7 @@ class Engine:
                 "max_positions": 5,
                 "min_mcap_usd": 3000,
                 "min_holders": 10,
+                "flat_exit_min": 1,
             },
             "guardrails": {
                 "enabled": True,
@@ -276,6 +277,8 @@ class Engine:
                 reason = "take profit"
             elif change <= s["stop_loss"]:
                 reason = "stop loss"
+            elif held >= s.get("flat_exit_min", 1) and abs(change) < 0.02:
+                reason = "no movement (flat)"
             elif held >= MAX_HOLD_MIN and change < 0.02:
                 reason = "stagnant / time exit"
             elif c["vol_spike"] < 0.3 and change > 0.05:
@@ -414,6 +417,8 @@ class Engine:
                     reason = "take profit"
                 elif change <= s["stop_loss"]:
                     reason = "stop loss"
+                elif held >= s.get("flat_exit_min", 1) and abs(change) < 0.02:
+                    reason = "no movement (flat)"
                 elif held >= MAX_HOLD_MIN and change < 0.02:
                     reason = "time exit"
             else:

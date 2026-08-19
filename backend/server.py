@@ -44,6 +44,7 @@ class StrategyReq(BaseModel):
     max_positions: int
     min_mcap_usd: float = 3000
     min_holders: int = 10
+    flat_exit_min: float = 1
 
 
 class GuardrailReq(BaseModel):
@@ -125,6 +126,7 @@ async def set_strategy(req: StrategyReq):
         "max_positions": max(1, min(int(req.max_positions), 20)),
         "min_mcap_usd": max(0.0, req.min_mcap_usd),
         "min_holders": max(0, int(req.min_holders)),
+        "flat_exit_min": max(0.1, req.flat_exit_min),
     }
     engine.bot["strategy"] = s
     engine.bot["settings"]["trade_size_sol"] = s["trade_size_sol"]

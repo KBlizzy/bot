@@ -571,6 +571,7 @@ const StrategyPanel = ({ state, refetch }) => {
   const [maxPos, setMaxPos] = useState(5);
   const [minMcap, setMinMcap] = useState(3000);
   const [minHolders, setMinHolders] = useState(10);
+  const [flatExit, setFlatExit] = useState(1);
   const [gEnabled, setGEnabled] = useState(true);
   const [dayLimit, setDayLimit] = useState(0.05);
   const [cap, setCap] = useState(0.3);
@@ -584,6 +585,7 @@ const StrategyPanel = ({ state, refetch }) => {
       setMaxPos(s.max_positions);
       setMinMcap(s.min_mcap_usd ?? 3000);
       setMinHolders(s.min_holders ?? 10);
+      setFlatExit(s.flat_exit_min ?? 1);
       setGEnabled(g.enabled);
       setDayLimit(g.daily_loss_limit_sol);
       setCap(g.total_spend_cap_sol);
@@ -600,6 +602,7 @@ const StrategyPanel = ({ state, refetch }) => {
         max_positions: parseInt(maxPos, 10),
         min_mcap_usd: parseFloat(minMcap),
         min_holders: parseInt(minHolders, 10),
+        flat_exit_min: parseFloat(flatExit),
       });
       await api.setGuardrails({
         enabled: gEnabled,
@@ -631,6 +634,7 @@ const StrategyPanel = ({ state, refetch }) => {
           <NumField label="Max Positions" value={maxPos} onChange={setMaxPos} testid="tune-maxpos" />
           <NumField label="Min Market Cap" value={minMcap} onChange={setMinMcap} step="500" suffix="$" testid="tune-minmcap" />
           <NumField label="Min Holders" value={minHolders} onChange={setMinHolders} testid="tune-minholders" />
+          <NumField label="Flat Exit (no move)" value={flatExit} onChange={setFlatExit} step="0.5" suffix="min" testid="tune-flatexit" />
         </div>
 
         <div className="border-t border-[#232528] pt-3 space-y-2.5">
