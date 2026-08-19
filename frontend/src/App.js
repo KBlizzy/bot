@@ -213,6 +213,7 @@ const Scanner = ({ coins, copy, copied }) => {
               <th className="px-4 py-2 font-medium">Coin</th>
               <th className="px-2 py-2 font-medium">CA</th>
               <th className="px-2 py-2 font-medium">Social</th>
+              <th className="px-2 py-2 font-medium">Dev</th>
               <th className="px-2 py-2 font-medium text-right">Mcap</th>
               <th className="px-2 py-2 font-medium text-right">Chg</th>
               <th className="px-2 py-2 font-medium text-right">Vol</th>
@@ -246,6 +247,15 @@ const Scanner = ({ coins, copy, copied }) => {
                   </button>
                 </td>
                 <td className="px-2 py-2.5"><Socials s={c.socials} /></td>
+                <td className="px-2 py-2.5">
+                  {!c.dev_checked ? (
+                    <span className="font-num text-[9px] px-1.5 py-0.5 rounded-sm bg-white/5 text-[#8A8F98]">?</span>
+                  ) : c.dev_sold ? (
+                    <span data-testid={`dev-sold-${c.mint}`} className="font-num text-[9px] px-1.5 py-0.5 rounded-sm bg-[#14F195]/15 text-[#14F195]">SOLD</span>
+                  ) : (
+                    <span className="font-num text-[9px] px-1.5 py-0.5 rounded-sm bg-[#FF3B30]/15 text-[#FF3B30]">HOLD</span>
+                  )}
+                </td>
                 <td className="px-2 py-2.5 text-right font-num text-xs">{fmtMcap(c.market_cap_usd)}</td>
                 <td className={`px-2 py-2.5 text-right font-num text-xs ${c.mcap_growth_pct >= 0 ? "text-[#14F195]" : "text-[#FF3B30]"}`}>
                   {fmtPct(c.mcap_growth_pct)}
@@ -339,7 +349,7 @@ const Wallets = ({ wallets, copy }) => (
 );
 
 /* ================= POSITIONS + TRADES ================= */
-const PositionsAndTrades = ({ positions, trades, copy }) => {
+const PositionsAndTrades = ({ positions, trades, copy, isReal, onSell }) => {
   const [tab, setTab] = useState("positions");
   return (
     <div className="panel rounded-sm" data-testid="ledger-panel">
@@ -364,16 +374,20 @@ const PositionsAndTrades = ({ positions, trades, copy }) => {
                 <th className="px-2 py-2 font-medium text-right">Size</th>
                 <th className="px-2 py-2 font-medium text-right">Value</th>
                 <th className="px-4 py-2 font-medium text-right">P&L</th>
+                {isReal && <th className="px-3 py-2 font-medium text-right">Action</th>}
               </tr>
             </thead>
             <tbody>
               {positions.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-6 font-num text-[11px] text-[#8A8F98]">No open positions. Bot is scouting…</td></tr>
+                <tr><td colSpan={isReal ? 7 : 6} className="px-4 py-6 font-num text-[11px] text-[#8A8F98]">No open positions. Bot is scouting…</td></tr>
               )}
               {positions.map((p) => (
                 <tr key={p.id} data-testid={`position-${p.mint}`} className="border-t border-[#1c1e21]">
                   <td className="px-4 py-2.5">
-                    <div className="font-num text-xs font-semibold">{p.symbol}</div>
+                    <div className="font-num text-xs font-semibold flex items-center gap-1.5">
+                      {p.symbol}
+                      {p.explorer && <a href={p.explorer} target="_blank" rel="noreferrer" className="text-[#9945FF]"><ArrowUpRight size={11} /></a>}
+                    </div>
                     <div className="text-[10px] text-[#8A8F98] truncate max-w-[120px]">{p.name}</div>
                   </td>
                   <td className="px-2 py-2.5 text-right font-num text-[10px] text-[#8A8F98]">${p.entry_price.toExponential(2)}</td>
@@ -383,6 +397,14 @@ const PositionsAndTrades = ({ positions, trades, copy }) => {
                   <td className={`px-4 py-2.5 text-right font-num text-xs ${p.pnl_usd >= 0 ? "text-[#14F195]" : "text-[#FF3B30]"}`}>
                     {fmtUsd(p.pnl_usd)} <span className="text-[10px]">({fmtPct(p.pnl_pct)})</span>
                   </td>
+                  {isReal && (
+                    <td className="px-3 py-2.5 text-right">
+                      <button data-testid={`sell-${p.mint}`} onClick={() => onSell(p.mint)}
+                        className="font-num text-[10px] px-2.5 py-1 rounded-sm bg-[#FF3B30]/15 text-[#FF3B30] hover:bg-[#FF3B30] hover:text-white transition-colors">
+                        SELL
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -413,7 +435,12 @@ const PositionsAndTrades = ({ positions, trades, copy }) => {
                       t.side === "BUY" ? "bg-[#14F195]/15 text-[#14F195]" : "bg-[#FF3B30]/15 text-[#FF3B30]"
                     }`}>{t.side}</span>
                   </td>
-                  <td className="px-2 py-2.5 font-num text-xs font-semibold">{t.symbol}</td>
+                  <td className="px-2 py-2.5 font-num text-xs font-semibold">
+                    <span className="flex items-center gap-1">
+                      {t.symbol}
+                      {t.explorer && <a href={t.explorer} target="_blank" rel="noreferrer" className="text-[#9945FF]"><ArrowUpRight size={11} /></a>}
+                    </span>
+                  </td>
                   <td className="px-2 py-2.5">
                     <button onClick={() => copy(t.mint)} className="flex items-center gap-1 font-num text-[10px] text-[#8A8F98] hover:text-white">
                       {shortCa(t.mint)} <Copy size={10} />
@@ -439,46 +466,58 @@ const PositionsAndTrades = ({ positions, trades, copy }) => {
 const RealWallet = ({ state, copy, refetch }) => {
   const [addr, setAddr] = useState("");
   const [amt, setAmt] = useState("");
+  const configured = state?.real_configured;
   const doWithdraw = async () => {
     if (!addr || !amt) return toast.error("Enter address and amount");
     try {
       const r = await api.withdraw(addr, parseFloat(amt));
-      toast.success("Withdrawal (simulated)", { description: r.message });
+      if (r.simulated) toast.success("Withdrawal (simulated)", { description: r.message });
+      else toast.success("SOL sent on-chain", { description: `tx ${shortCa(r.signature)}` });
       setAddr(""); setAmt(""); refetch();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Withdraw failed");
     }
   };
   const doDeposit = async () => {
-    await api.depositSim(0.5);
-    toast.success("Simulated 0.5 ◎ deposit received");
-    refetch();
+    try { await api.depositSim(0.5); toast.success("Simulated 0.5 ◎ deposit"); refetch(); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Not available on live wallet"); }
   };
   return (
     <div className="panel rounded-sm border-[#FF3B30]/40" data-testid="real-wallet-panel">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[#FF3B30]/30 bg-[#FF3B30]/[0.05]">
         <AlertTriangle size={15} className="text-[#FF3B30]" />
-        <span className="font-head text-sm text-[#FF3B30]">REAL WALLET — SIMULATION SHELL</span>
+        <span className="font-head text-sm text-[#FF3B30]">
+          {configured ? "REAL WALLET — LIVE" : "REAL WALLET — SIMULATION SHELL"}
+        </span>
+        {configured && <span className="live-dot w-2 h-2 rounded-full bg-[#FF3B30] ml-auto" />}
       </div>
       <div className="p-4 space-y-4">
         <div className="font-num text-[10px] text-[#8A8F98] leading-relaxed border border-[#FF3B30]/20 bg-[#FF3B30]/[0.04] p-3 rounded-sm">
-          ⚠ Real on-chain trading is NOT enabled in this build. No real SOL moves. This panel demonstrates
-          balance, deposit and withdraw flows safely as a simulation.
+          {configured
+            ? "⚠ LIVE trading is enabled. Real SOL moves on Solana mainnet. When Real mode + Scouting are ON the bot auto-buys/sells 0.01 ◎ at a time on verified coins."
+            : "⚠ Real on-chain trading is NOT enabled. No real SOL moves — this demonstrates the flows safely as a simulation."}
         </div>
         <div>
-          <div className="font-num text-[10px] uppercase tracking-widest text-[#8A8F98]">Real Balance</div>
+          <div className="font-num text-[10px] uppercase tracking-widest text-[#8A8F98]">Real Balance {configured && <span className="text-[#14F195]">· on-chain</span>}</div>
           <div className="font-num text-3xl mt-1">{fmtSol(state?.real_balance_sol)}</div>
           <div className="font-num text-xs text-[#8A8F98]">≈ {fmtUsd((state?.real_balance_sol || 0) * (state?.sol_usd || 0))}</div>
         </div>
         <div>
-          <div className="font-num text-[10px] uppercase tracking-widest text-[#8A8F98] mb-1">Deposit Address</div>
-          <button data-testid="copy-deposit-addr" onClick={() => copy(state?.real_deposit_address, "Deposit address")}
+          <div className="font-num text-[10px] uppercase tracking-widest text-[#8A8F98] mb-1">
+            {configured ? "Wallet Address (send SOL here to fund)" : "Deposit Address"}
+          </div>
+          <button data-testid="copy-deposit-addr" onClick={() => copy(state?.real_deposit_address, "Wallet address")}
             className="w-full flex items-center justify-between gap-2 border border-[#232528] rounded-sm px-3 py-2 font-num text-[11px] text-left hover:border-[#9945FF]">
             <span className="truncate">{state?.real_deposit_address}</span>
             <Copy size={13} className="shrink-0 text-[#8A8F98]" />
           </button>
-          <button data-testid="sim-deposit-btn" onClick={doDeposit}
-            className="mt-2 font-num text-[10px] text-[#9945FF] hover:underline">+ simulate 0.5 ◎ deposit</button>
+          {configured ? (
+            <a href={`https://solscan.io/account/${state?.real_deposit_address}`} target="_blank" rel="noreferrer"
+              className="mt-2 inline-block font-num text-[10px] text-[#9945FF] hover:underline">view on solscan ↗</a>
+          ) : (
+            <button data-testid="sim-deposit-btn" onClick={doDeposit}
+              className="mt-2 font-num text-[10px] text-[#9945FF] hover:underline">+ simulate 0.5 ◎ deposit</button>
+          )}
         </div>
         <div className="space-y-2">
           <div className="font-num text-[10px] uppercase tracking-widest text-[#8A8F98]">Withdraw To Any Wallet</div>
@@ -539,14 +578,27 @@ function App() {
   };
   const onMode = async (m) => {
     await api.setMode(m);
+    const live = st?.real_configured;
     toast[m === "real" ? "error" : "success"](`Switched to ${m.toUpperCase()} mode`,
-      m === "real" ? { description: "Simulation shell — no real funds move" } : undefined);
+      m === "real"
+        ? { description: live ? "LIVE — real SOL will move when scouting" : "Simulation shell — no real funds move" }
+        : undefined);
     refetchAll();
   };
   const onRestart = async () => {
     await api.restart();
     toast.success("Reset to $20.00", { description: "Positions & history cleared" });
     refetchAll();
+  };
+  const onRealSell = async (mint) => {
+    toast.message("Submitting on-chain sell…");
+    try {
+      await api.realSell(mint);
+      toast.success("Sell submitted", { description: "Confirming on-chain" });
+      refetchAll();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Sell failed");
+    }
   };
 
   const st = state.data;
@@ -558,6 +610,14 @@ function App() {
       <Header state={st} onToggle={onToggle} onMode={onMode} onRestart={onRestart} />
 
       <main className="px-4 lg:px-6 py-4 space-y-3 relative z-10 max-w-[1600px]">
+        {isReal && st?.real_configured && (
+          <div className="panel rounded-sm border-[#FF3B30]/50 bg-[#FF3B30]/[0.06] px-4 py-2.5 flex items-center gap-3" data-testid="live-banner">
+            <AlertTriangle size={15} className="text-[#FF3B30]" />
+            <span className="font-num text-xs text-[#FF3B30]">
+              LIVE TRADING — real SOL on Solana mainnet. Bot {st?.running ? "is auto-trading now" : "is PAUSED (hit SCOUT to start)"}. Balance {fmtSol(st?.real_balance_sol)}.
+            </span>
+          </div>
+        )}
         <StatsRow state={st} trades={trades.data} />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
@@ -580,6 +640,8 @@ function App() {
               positions={positions.data?.positions || []}
               trades={trades.data?.trades || []}
               copy={copy}
+              isReal={isReal}
+              onSell={onRealSell}
             />
           </div>
           <div className="lg:col-span-4">

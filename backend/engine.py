@@ -10,6 +10,8 @@ from datetime import datetime, timezone, timedelta
 
 import aiohttp
 
+import real_trader
+
 SOL_USD = 152.0  # reference SOL price for USD conversions
 
 # ---- Bot trade parameters (as requested by user) ----
@@ -41,9 +43,11 @@ class Engine:
     def __init__(self, db):
         self.db = db
         self.coins = {}          # mint -> coin dict
-        self.positions = {}      # mint -> position dict (open)
+        self.positions = {}      # mint -> position dict (open, PAPER)
+        self.real_positions = {} # mint -> position dict (open, REAL on-chain)
         self.decisions = []      # recent AI decisions
         self.wallets = []        # scouted smart wallets
+        self._loop_count = 0
         self.bot = {
             "mode": "paper",
             "running": True,
@@ -87,11 +91,20 @@ class Engine:
         socials = real.get("socials") if real else self._rand_socials()
         has_social = any(socials.values())
         price = mcap_usd / 1_000_000_000  # 1B supply convention
+        # dev-sold status: sim coins get a heuristic; live coins verified on-chain
+        if real:
+            dev_sold, dev_checked = False, False
+        else:
+            dev_sold, dev_checked = random.random() < 0.55, True
         return {
             "mint": mint,
             "name": name,
             "symbol": symbol,
             "image": real.get("image") if real else "",
+            "creator": real.get("creator") if real else "",
+            "dev_sold": dev_sold,
+            "dev_checked": dev_checked,
+            "dev_attempts": 0,
             "socials": socials,
             "has_social": has_social,
             "created_at": iso(now()),
@@ -191,6 +204,9 @@ class Engine:
             return False, "no social link"
         if c["global_fees_paid_sol"] < MIN_GLOBAL_FEES_SOL:
             return False, f"fees {c['global_fees_paid_sol']:.2f} < 0.5"
+        if not c.get("dev_sold"):
+            return False, ("dev still holds supply" if c.get("dev_checked")
+                           else "dev holdings unverified")
         if self._age_min(c) > NEW_COIN_MAX_AGE_MIN:
             return False, "too old"
         return True, "ok"
@@ -278,7 +294,8 @@ class Engine:
         self._log_decision(c or {"name": pos["name"], "symbol": pos["symbol"],
                                  "mint": mint}, "SELL", f"{reason} ({pnl_pct:+.0f}%)")
 
-    async def _record_trade(self, c, side, price, usd, reason, pnl, pnl_pct=0, entry=None):
+    async def _record_trade(self, c, side, price, usd, reason, pnl, pnl_pct=0, entry=None,
+                            mode=None, sig=None):
         doc = {
             "id": str(uuid.uuid4()),
             "mint": c["mint"],
@@ -292,7 +309,9 @@ class Engine:
             "pnl_usd": pnl,
             "pnl_pct": pnl_pct,
             "entry_price": entry,
-            "mode": self.bot["mode"],
+            "mode": mode or self.bot["mode"],
+            "sig": sig,
+            "explorer": f"https://solscan.io/tx/{sig}" if sig else None,
             "time": iso(now()),
         }
         await self.db.trades.insert_one(dict(doc))
@@ -309,6 +328,137 @@ class Engine:
             "time": iso(now()),
         })
         self.decisions = self.decisions[:40]
+
+    # ---------------- REAL on-chain trading ----------------
+    async def tick_real(self):
+        if not self.bot["running"] or self.bot["mode"] != "real":
+            return
+        if not real_trader.is_configured():
+            return
+        # ---- manage open real positions using REAL prices ----
+        for mint in list(self.real_positions.keys()):
+            pos = self.real_positions[mint]
+            cur_real = await real_trader.token_price_usd(mint)
+            if cur_real is not None:
+                pos["cur_real"] = cur_real  # cache for views
+            held = (now() - datetime.fromisoformat(pos["entry_time"])).total_seconds() / 60
+            entry_real = pos.get("entry_price_real")
+            reason = None
+            if entry_real and cur_real:
+                change = (cur_real - entry_real) / entry_real
+                if change >= TAKE_PROFIT:
+                    reason = "take profit"
+                elif change <= STOP_LOSS:
+                    reason = "stop loss"
+                elif held >= MAX_HOLD_MIN and change < 0.02:
+                    reason = "time exit"
+            else:
+                # no real price feed yet -> hold; only a long safety exit
+                if held >= 90:
+                    reason = "safety exit (no live price)"
+            if reason:
+                await self._real_sell(mint, reason, cur_real)
+
+        # ---- scan for real buys (ONLY genuine live coins) ----
+        cost_sol = TRADE_SIZE_SOL + 0.0002  # trade + est. fees
+        if self.bot["real_balance_sol"] < cost_sol:
+            return
+        candidates = []
+        for c in self.coins.values():
+            if c["source"] != "live":       # never trade simulated mints on-chain
+                continue
+            if c["mint"] in self.real_positions:
+                continue
+            ok, _ = self.passes_filters(c)
+            if not ok:
+                continue
+            score, growth, _, _ = self._score(c)
+            if score > 3.5:
+                candidates.append((score, c, growth))
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for score, c, growth in candidates[:1]:  # conservative: one real buy per tick
+            if len(self.real_positions) >= 5:
+                break
+            await self._real_buy(c, growth)
+
+    async def _real_buy(self, c, growth):
+        try:
+            sig = await real_trader.execute_trade("buy", c["mint"], TRADE_SIZE_SOL, True)
+        except Exception as e:
+            self._log_decision(c, "SKIP", f"real buy failed: {str(e)[:80]}")
+            print("real buy error:", e)
+            return
+        entry_real = await real_trader.token_price_usd(c["mint"])
+        self.real_positions[c["mint"]] = {
+            "id": str(uuid.uuid4()),
+            "mint": c["mint"], "name": c["name"], "symbol": c["symbol"],
+            "entry_price": c["price"], "entry_price_real": entry_real,
+            "cur_real": entry_real, "entry_time": iso(now()),
+            "size_sol": TRADE_SIZE_SOL, "cost_usd": TRADE_SIZE_SOL * SOL_USD,
+            "qty": TRADE_SIZE_SOL * SOL_USD / c["price"], "sig": sig,
+        }
+        await self.db.real_positions.update_one(
+            {"_id": c["mint"]}, {"$set": self.real_positions[c["mint"]]}, upsert=True)
+        reason = (f"REAL buy {TRADE_SIZE_SOL}◎ · vol {c['vol_spike']:.1f}x, "
+                  f"mcap +{growth*100:.0f}%, fees {c['global_fees_paid_sol']:.2f}◎, dev sold")
+        await self._record_trade(c, "BUY", c["price"], TRADE_SIZE_SOL * SOL_USD,
+                                 reason, 0, mode="real", sig=sig)
+        self._log_decision(c, "BUY", reason)
+
+    async def _real_sell(self, mint, reason, cur_real=None):
+        pos = self.real_positions.get(mint)
+        if not pos:
+            return
+        try:
+            sig = await real_trader.execute_trade("sell", mint, "100%", False)
+        except Exception as e:
+            self._log_decision({"mint": mint, "symbol": pos["symbol"], "name": pos["name"]},
+                               "SKIP", f"real sell failed: {str(e)[:80]}")
+            print("real sell error:", e)
+            return
+        self.real_positions.pop(mint, None)
+        await self.db.real_positions.delete_one({"_id": mint})
+        c = self.coins.get(mint)
+        entry_real = pos.get("entry_price_real")
+        if entry_real and cur_real:
+            pnl_pct = (cur_real - entry_real) / entry_real * 100
+            proceeds = pos["cost_usd"] * (cur_real / entry_real)
+        else:
+            pnl_pct = 0.0
+            proceeds = pos["cost_usd"]
+        est_pnl = proceeds - pos["cost_usd"]
+        await self._record_trade(c or {"mint": mint, "name": pos["name"], "symbol": pos["symbol"]},
+                                 "SELL", cur_real or pos["entry_price"], proceeds,
+                                 f"{reason} ({pnl_pct:+.0f}%)", est_pnl, pnl_pct,
+                                 entry_real, mode="real", sig=sig)
+        self._log_decision(c or {"mint": mint, "symbol": pos["symbol"], "name": pos["name"]},
+                           "SELL", f"REAL {reason} ({pnl_pct:+.0f}%)")
+
+    def real_positions_view(self):
+        out = []
+        for pos in self.real_positions.values():
+            entry_real = pos.get("entry_price_real")
+            cur_real = pos.get("cur_real") or entry_real
+            has_price = bool(entry_real and cur_real)
+            if has_price:
+                value = pos["cost_usd"] * (cur_real / entry_real)
+                pnl_pct = (cur_real - entry_real) / entry_real * 100
+            else:
+                value = pos["cost_usd"]
+                pnl_pct = 0.0
+            out.append({
+                **{k: pos[k] for k in ("id", "mint", "name", "symbol", "entry_price",
+                                       "entry_time", "size_sol", "cost_usd", "sig")},
+                "entry_price": entry_real or pos["entry_price"],
+                "current_price": cur_real or pos["entry_price"],
+                "has_live_price": has_price,
+                "value_usd": value,
+                "pnl_usd": value - pos["cost_usd"],
+                "pnl_pct": pnl_pct,
+                "explorer": f"https://solscan.io/tx/{pos['sig']}",
+                "history": [],
+            })
+        return sorted(out, key=lambda x: x["entry_time"], reverse=True)
 
     def tick_wallets(self):
         # smart wallets occasionally "buy" a live coin -> copy-trade feed
@@ -328,6 +478,10 @@ class Engine:
         if st:
             st.pop("_id", None)
             self.bot.update(st)
+        async for doc in self.db.real_positions.find():
+            doc.pop("_id", None)
+            if doc.get("mint"):
+                self.real_positions[doc["mint"]] = doc
 
     async def save(self):
         await self.db.bot_state.update_one(
@@ -345,6 +499,7 @@ class Engine:
     async def sim_loop(self):
         while True:
             try:
+                self._loop_count += 1
                 self.tick_market()
                 await self.tick_bot()
                 self.tick_wallets()
@@ -397,16 +552,54 @@ class Engine:
             "name": msg.get("name"),
             "symbol": msg.get("symbol"),
             "marketCapSol": msg.get("marketCapSol"),
+            "creator": msg.get("traderPublicKey"),
             "socials": socials,
             "image": image,
         }
         c = self._make_coin("live", real)
         self.coins[c["mint"]] = c
 
+    async def real_loop(self):
+        while True:
+            try:
+                await self.tick_real()
+                if real_trader.is_configured():
+                    bal = await real_trader.get_balance_sol()
+                    if bal is not None:
+                        self.bot["real_balance_sol"] = bal
+                        await self.save()
+            except Exception as e:
+                print("real_loop error:", e)
+            await asyncio.sleep(6)
+
+    async def dev_check_loop(self):
+        """Verify on-chain whether the dev/creator has sold their supply,
+        for live coins with a known creator. Throttled to spare the RPC."""
+        while True:
+            try:
+                pending = [c for c in self.coins.values()
+                           if c["source"] == "live" and not c.get("dev_checked")
+                           and c.get("creator")]
+                for c in pending[:4]:
+                    bal = await real_trader.creator_token_balance(c["creator"], c["mint"])
+                    if bal is not None:
+                        c["dev_sold"] = bal <= 1.0  # dev effectively out of supply
+                        c["dev_checked"] = True
+                    else:
+                        c["dev_attempts"] = c.get("dev_attempts", 0) + 1
+                        if c["dev_attempts"] >= 3:
+                            c["dev_checked"] = True  # give up -> stays ineligible (safe)
+                    await asyncio.sleep(1)
+            except Exception as e:
+                print("dev_check_loop error:", e)
+            await asyncio.sleep(8)
+
     def start(self):
         loop = asyncio.get_event_loop()
         self._tasks.append(loop.create_task(self.sim_loop()))
         self._tasks.append(loop.create_task(self.ingest_loop()))
+        self._tasks.append(loop.create_task(self.real_loop()))
+        self._tasks.append(loop.create_task(self.dev_check_loop()))
 
     # ---------------- view builders ----------------
     def coin_view(self, c):
@@ -417,6 +610,8 @@ class Engine:
             "image": c["image"],
             "socials": c["socials"],
             "has_social": c["has_social"],
+            "dev_sold": c.get("dev_sold", False),
+            "dev_checked": c.get("dev_checked", False),
             "created_at": c["created_at"],
             "age_min": round(self._age_min(c), 1),
             "price": c["price"],

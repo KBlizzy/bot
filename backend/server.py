@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 
 from engine import Engine, SOL_USD, START_BALANCE_USD
+import real_trader
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -30,6 +31,10 @@ class ModeReq(BaseModel):
 class WithdrawReq(BaseModel):
     address: str
     amount_sol: float
+
+
+class TradeReq(BaseModel):
+    mint: str
 
 
 @api_router.get("/")
@@ -58,9 +63,12 @@ async def get_coin(mint: str):
 
 @api_router.get("/bot/state")
 async def bot_state():
-    positions = engine.positions_view()
+    real = engine.bot["mode"] == "real"
+    positions = engine.real_positions_view() if real else engine.positions_view()
     pos_value = sum(p["value_usd"] for p in positions)
-    equity = engine.bot["paper_balance_usd"] + pos_value
+    equity = engine.bot["paper_balance_usd"] + sum(
+        p["value_usd"] for p in engine.positions_view())
+    configured = real_trader.is_configured()
     return {
         **engine.bot,
         "sol_usd": SOL_USD,
@@ -70,6 +78,10 @@ async def bot_state():
         "equity_usd": equity,
         "total_pnl_usd": equity - START_BALANCE_USD,
         "total_pnl_pct": (equity - START_BALANCE_USD) / START_BALANCE_USD * 100,
+        "real_configured": configured,
+        "real_pubkey": real_trader.public_key(),
+        "real_rpc": real_trader.rpc_url(),
+        "real_open_positions": len(engine.real_positions),
     }
 
 
@@ -97,14 +109,16 @@ async def bot_restart():
 
 @api_router.get("/positions")
 async def positions():
-    return {"positions": engine.positions_view()}
+    if engine.bot["mode"] == "real":
+        return {"positions": engine.real_positions_view(), "mode": "real"}
+    return {"positions": engine.positions_view(), "mode": "paper"}
 
 
 @api_router.get("/trades")
 async def trades(hours: int = 24):
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     docs = await db.trades.find(
-        {"time": {"$gte": cutoff}}, {"_id": 0}
+        {"time": {"$gte": cutoff}, "mode": engine.bot["mode"]}, {"_id": 0}
     ).sort("time", -1).to_list(500)
     buys = sum(1 for d in docs if d["side"] == "BUY")
     sells = [d for d in docs if d["side"] == "SELL"]
@@ -131,7 +145,20 @@ async def wallets():
 
 @api_router.post("/wallet/withdraw")
 async def withdraw(req: WithdrawReq):
-    # REAL trading is a clearly-marked SIMULATION shell. No on-chain action occurs.
+    if real_trader.is_configured():
+        try:
+            sig = await real_trader.withdraw(req.address, req.amount_sol)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+        bal = await real_trader.get_balance_sol()
+        if bal is not None:
+            engine.bot["real_balance_sol"] = bal
+            await engine.save()
+        return {"ok": True, "simulated": False, "signature": sig,
+                "explorer": f"https://solscan.io/tx/{sig}",
+                "message": f"Sent {req.amount_sol} SOL to {req.address}",
+                "real_balance_sol": engine.bot["real_balance_sol"]}
+    # no key -> simulation shell
     if engine.bot["real_balance_sol"] < req.amount_sol:
         raise HTTPException(400, "insufficient real balance")
     engine.bot["real_balance_sol"] -= req.amount_sol
@@ -143,10 +170,35 @@ async def withdraw(req: WithdrawReq):
 
 @api_router.post("/wallet/deposit_sim")
 async def deposit_sim(req: WithdrawReq):
-    # helper to simulate an inbound deposit so real-mode UI is demonstrable
+    if real_trader.is_configured():
+        raise HTTPException(400, "wallet is live — deposit real SOL to the address instead")
     engine.bot["real_balance_sol"] += req.amount_sol
     await engine.save()
     return {"ok": True, "real_balance_sol": engine.bot["real_balance_sol"]}
+
+
+@api_router.post("/real/buy")
+async def real_buy(req: TradeReq):
+    if not real_trader.is_configured():
+        raise HTTPException(400, "real wallet not configured")
+    c = engine.coins.get(req.mint)
+    if not c:
+        raise HTTPException(404, "coin not in scanner")
+    await engine._real_buy(c, (c["market_cap_usd"] - c["mcap_start"]) / max(c["mcap_start"], 1))
+    if req.mint not in engine.real_positions:
+        raise HTTPException(502, "buy failed on-chain (see server logs)")
+    return {"ok": True, "position": engine.real_positions[req.mint]}
+
+
+@api_router.post("/real/sell")
+async def real_sell(req: TradeReq):
+    if not real_trader.is_configured():
+        raise HTTPException(400, "real wallet not configured")
+    if req.mint not in engine.real_positions:
+        raise HTTPException(404, "no open real position for this mint")
+    cur = await real_trader.token_price_usd(req.mint)
+    await engine._real_sell(req.mint, "manual sell", cur)
+    return {"ok": True, "closed": req.mint not in engine.real_positions}
 
 
 app.include_router(api_router)
@@ -167,8 +219,13 @@ logger = logging.getLogger(__name__)
 async def startup():
     await engine.load()
     engine.seed()
+    if real_trader.is_configured():
+        engine.bot["real_deposit_address"] = real_trader.public_key()
+        bal = await real_trader.get_balance_sol()
+        if bal is not None:
+            engine.bot["real_balance_sol"] = bal
     engine.start()
-    logger.info("engine started")
+    logger.info("engine started (real_configured=%s)", real_trader.is_configured())
 
 
 @app.on_event("shutdown")
