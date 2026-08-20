@@ -50,6 +50,8 @@ class StrategyReq(BaseModel):
     flat_exit_min: float = 1
     min_volume_usd: float = 5000
     rebuy_cooldown_min: float = 5
+    max_hold_min: float = 45
+    min_score: float = 3.5
 
 
 class GuardrailReq(BaseModel):
@@ -140,10 +142,13 @@ async def set_strategy(req: StrategyReq):
         "flat_exit_min": max(0.1, req.flat_exit_min),
         "min_volume_usd": max(0.0, req.min_volume_usd),
         "rebuy_cooldown_min": max(0.0, req.rebuy_cooldown_min),
+        "max_hold_min": max(0.5, req.max_hold_min),
+        "min_score": max(0.0, req.min_score),
     }
     engine.bot["strategy"] = s
     engine.bot["settings"]["trade_size_sol"] = s["trade_size_sol"]
     await engine.save()
+    logger.info("strategy updated: %s", s)
     return {"ok": True, "strategy": s}
 
 
@@ -228,9 +233,12 @@ async def wallets():
 
 @api_router.post("/wallet/withdraw")
 async def withdraw(req: WithdrawReq):
+    # amount_sol <= 0 means "send everything" (minus the on-chain fee reserve)
+    send_all = req.amount_sol is None or req.amount_sol <= 0
     if real_trader.is_configured():
         try:
-            sig = await real_trader.withdraw(req.address, req.amount_sol)
+            amt = None if send_all else req.amount_sol
+            sig, sent_sol = await real_trader.withdraw(req.address, amt)
         except Exception as e:
             raise HTTPException(400, str(e))
         bal = await real_trader.get_balance_sol()
@@ -239,15 +247,17 @@ async def withdraw(req: WithdrawReq):
             await engine.save()
         return {"ok": True, "simulated": False, "signature": sig,
                 "explorer": f"https://solscan.io/tx/{sig}",
-                "message": f"Sent {req.amount_sol} SOL to {req.address}",
+                "message": f"Sent {sent_sol:.6f} SOL to {req.address}",
+                "sent_sol": sent_sol,
                 "real_balance_sol": engine.bot["real_balance_sol"]}
     # no key -> simulation shell
-    if engine.bot["real_balance_sol"] < req.amount_sol:
+    amt = engine.bot["real_balance_sol"] if send_all else req.amount_sol
+    if amt <= 0 or engine.bot["real_balance_sol"] < amt:
         raise HTTPException(400, "insufficient real balance")
-    engine.bot["real_balance_sol"] -= req.amount_sol
+    engine.bot["real_balance_sol"] -= amt
     await engine.save()
-    return {"ok": True, "simulated": True,
-            "message": f"[SIMULATION] Would send {req.amount_sol} SOL to {req.address}",
+    return {"ok": True, "simulated": True, "sent_sol": amt,
+            "message": f"[SIMULATION] Would send {amt:.6f} SOL to {req.address}",
             "real_balance_sol": engine.bot["real_balance_sol"]}
 
 
@@ -298,8 +308,45 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _readiness_report():
+    """Log a clear green/red checklist of what's configured before trading starts."""
+    ok, warn = [], []
+
+    # MongoDB
+    mongo = os.environ.get('MONGO_URL')
+    if mongo:
+        ok.append("MONGO_URL set")
+    else:
+        warn.append("MONGO_URL not set -> using local fallback (mongodb://localhost:27017)")
+
+    # RPC
+    rpc = os.environ.get('SOLANA_RPC_URL', '')
+    if not rpc:
+        warn.append("SOLANA_RPC_URL not set -> falling back to PUBLIC RPC (rate-limited, real trades WILL fail)")
+    elif 'api.mainnet-beta.solana.com' in rpc:
+        warn.append("SOLANA_RPC_URL is the PUBLIC RPC (rate-limited, real trades WILL fail) -> use a Helius/Triton URL")
+    else:
+        ok.append("SOLANA_RPC_URL set (private RPC)")
+
+    # Wallet key
+    if real_trader.is_configured():
+        ok.append(f"SOLANA_PRIVATE_KEY_B58 set -> bot wallet {real_trader.public_key()}")
+    else:
+        warn.append("SOLANA_PRIVATE_KEY_B58 not set -> REAL trading disabled (paper mode only). Run generate_wallet.py")
+
+    logger.info("=== PumpScout readiness ===")
+    for line in ok:
+        logger.info("  [OK]   %s", line)
+    for line in warn:
+        logger.warning("  [WARN] %s", line)
+    if not warn:
+        logger.info("  All systems go: REAL trading is fully configured.")
+    logger.info("===========================")
+
+
 @app.on_event("startup")
 async def startup():
+    _readiness_report()
     await engine.load()
     engine.seed()
     if real_trader.is_configured():
@@ -307,6 +354,7 @@ async def startup():
         bal = await real_trader.get_balance_sol()
         if bal is not None:
             engine.bot["real_balance_sol"] = bal
+            logger.info("bot wallet balance: %.4f SOL", bal)
     engine.start()
     logger.info("engine started (real_configured=%s)", real_trader.is_configured())
 

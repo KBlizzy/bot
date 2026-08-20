@@ -73,6 +73,8 @@ class Engine:
                 "flat_exit_min": 1,
                 "min_volume_usd": 5000,
                 "rebuy_cooldown_min": 5,
+                "max_hold_min": MAX_HOLD_MIN,
+                "min_score": 3.5,
             },
             "guardrails": {
                 "enabled": True,
@@ -294,7 +296,7 @@ class Engine:
                 reason = "stop loss"
             elif held >= s.get("flat_exit_min", 1) and abs(change) < 0.02:
                 reason = "no movement (flat)"
-            elif held >= MAX_HOLD_MIN and change < 0.02:
+            elif held >= s.get("max_hold_min", MAX_HOLD_MIN) and change < 0.02:
                 reason = "stagnant / time exit"
             elif c["vol_spike"] < 0.3 and change > 0.05:
                 reason = "momentum fading"
@@ -306,6 +308,8 @@ class Engine:
             return  # real mode is a simulation shell; no auto real trades
         if self.bot.get("tracker_enabled"):
             return  # tracker mode: only copy the tracked wallet, no self-scan
+        s = self._strat()
+        min_score = s.get("min_score", 3.5)
         candidates = []
         for c in self.coins.values():
             if c["mint"] in self.positions:
@@ -316,18 +320,18 @@ class Engine:
             if not ok:
                 continue
             score, growth, age, newness = self._score(c)
-            if score > 3.5:
+            if score > min_score:
                 candidates.append((score, c, growth))
         candidates.sort(key=lambda x: x[0], reverse=True)
-        s = self._strat()
         cost_usd = s["trade_size_sol"] * SOL_USD
-        for score, c, growth in candidates[:3]:
+        # Deterministic: fill the top-ranked candidates that pass the strategy,
+        # up to max_positions. No random gate — behavior follows the strategy.
+        for score, c, growth in candidates:
             if len(self.positions) >= s["max_positions"]:
                 break
             if self.bot["paper_balance_usd"] < cost_usd:
                 break
-            if random.random() < 0.55:  # bot is selective
-                await self._open(c, score, growth)
+            await self._open(c, score, growth)
 
     async def _open(self, c, score, growth):
         cost_usd = self._strat()["trade_size_sol"] * SOL_USD
@@ -439,7 +443,7 @@ class Engine:
                     reason = "stop loss"
                 elif held >= s.get("flat_exit_min", 1) and abs(change) < 0.02:
                     reason = "no movement (flat)"
-                elif held >= MAX_HOLD_MIN and change < 0.02:
+                elif held >= s.get("max_hold_min", MAX_HOLD_MIN) and change < 0.02:
                     reason = "time exit"
             else:
                 if held >= 90:
@@ -476,7 +480,7 @@ class Engine:
             if not ok:
                 continue
             score, growth, _, _ = self._score(c)
-            if score > 3.5:
+            if score > s.get("min_score", 3.5):
                 candidates.append((score, c, growth))
         candidates.sort(key=lambda x: x[0], reverse=True)
         for score, c, growth in candidates[:1]:  # conservative: one real buy per tick
@@ -631,53 +635,50 @@ class Engine:
     async def _on_tracked_trade(self, msg, wallet):
         if not self.bot.get("tracker_enabled"):
             return
-        if msg.get("txType") != "buy":
-            return
         if msg.get("traderPublicKey") != wallet:
             return
         mint = msg.get("mint")
         if not mint:
             return
-        c = self.coins.get(mint)
-        if not c:
-            c = self._make_coin("live", {
-                "mint": mint,
-                "name": msg.get("name") or msg.get("symbol") or mint[:6],
-                "symbol": msg.get("symbol") or mint[:4].upper(),
-                "marketCapSol": msg.get("marketCapSol"),
-                "bonding_curve_key": msg.get("bondingCurveKey"),
-                "creator": None,
-                "socials": {"twitter": "", "telegram": "", "website": ""},
-                "image": "",
-            })
-            self.coins[mint] = c
-        self._log_decision(c, "BUY", f"copy-trade from tracked wallet {wallet[:4]}…{wallet[-4:]}")
-        await self.copy_buy(c)
+        tx = msg.get("txType")
+        short = f"{wallet[:4]}…{wallet[-4:]}"
+        if tx == "buy":
+            c = self.coins.get(mint)
+            if not c:
+                c = self._make_coin("live", {
+                    "mint": mint,
+                    "name": msg.get("name") or msg.get("symbol") or mint[:6],
+                    "symbol": msg.get("symbol") or mint[:4].upper(),
+                    "marketCapSol": msg.get("marketCapSol"),
+                    "bonding_curve_key": msg.get("bondingCurveKey"),
+                    "creator": None,
+                    "socials": {"twitter": "", "telegram": "", "website": ""},
+                    "image": "",
+                })
+                self.coins[mint] = c
+            self._log_decision(c, "BUY", f"copy-trade BUY from tracked wallet {short}")
+            await self.copy_buy(c)
+        elif tx == "sell":
+            # Mirror the sell: if we copied into this coin, exit when they exit.
+            await self.copy_sell(mint, f"copy-trade: tracked wallet {short} sold")
 
-    async def tracker_loop(self):
-        import websockets
-        url = "wss://pumpportal.fun/api/data"
-        while True:
-            wallet = self.bot.get("tracked_wallet")
-            if not (self.bot.get("tracker_enabled") and wallet):
-                await asyncio.sleep(3)
-                continue
-            try:
-                async with websockets.connect(url, ping_interval=20) as ws:
-                    await ws.send(json.dumps(
-                        {"method": "subscribeAccountTrade", "keys": [wallet]}))
-                    async for raw in ws:
-                        if (not self.bot.get("tracker_enabled")
-                                or self.bot.get("tracked_wallet") != wallet):
-                            break
-                        try:
-                            msg = json.loads(raw)
-                        except Exception:
-                            continue
-                        await self._on_tracked_trade(msg, wallet)
-            except Exception as e:
-                print("tracker_loop:", e)
-                await asyncio.sleep(5)
+    async def copy_sell(self, mint, reason):
+        """Mirror a sell from the tracked wallet for whichever mode is active."""
+        if self.bot["mode"] == "real":
+            if mint in self.real_positions:
+                cur = await self._real_price(mint)
+                self._log_decision(
+                    {"mint": mint, "symbol": self.real_positions[mint].get("symbol", ""),
+                     "name": self.real_positions[mint].get("name", "")}, "SELL", reason)
+                await self._real_sell(mint, reason, cur)
+        else:
+            if mint in self.positions:
+                await self._close(mint, reason)
+
+    def _tracked_target(self):
+        """Wallet we should currently be subscribed to (or None)."""
+        w = (self.bot.get("tracked_wallet") or "").strip()
+        return w if (self.bot.get("tracker_enabled") and w) else None
 
     async def close_all(self):
         """Close every open position for the active mode (frees all slots)."""
@@ -744,25 +745,63 @@ class Engine:
                 print("sim_loop error:", e)
             await asyncio.sleep(4)
 
-    async def ingest_loop(self):
-        """Connect to PumpPortal free websocket for REAL new pump.fun tokens."""
+    async def stream_loop(self):
+        """Single PumpPortal websocket for BOTH new-token ingest and copy-trade.
+
+        PumpPortal drops clients that open multiple simultaneous connections from
+        the same IP, so new-token and tracked-wallet feeds MUST share one socket.
+        The tracked-wallet subscription is (un)subscribed live as the user toggles
+        the tracker, without reconnecting."""
         import websockets
         url = "wss://pumpportal.fun/api/data"
         while True:
+            subscribed = None  # wallet we're currently subscribed to on this socket
             try:
                 async with websockets.connect(url, ping_interval=20) as ws:
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
+                    want = self._tracked_target()
+                    if want:
+                        await ws.send(json.dumps(
+                            {"method": "subscribeAccountTrade", "keys": [want]}))
+                        subscribed = want
+                        print("copy-trade: subscribed to", want)
                     async for raw in ws:
+                        # reconcile tracked-wallet subscription with current settings
+                        want = self._tracked_target()
+                        if want != subscribed:
+                            if subscribed:
+                                await ws.send(json.dumps(
+                                    {"method": "unsubscribeAccountTrade",
+                                     "keys": [subscribed]}))
+                                print("copy-trade: unsubscribed from", subscribed)
+                            if want:
+                                await ws.send(json.dumps(
+                                    {"method": "subscribeAccountTrade", "keys": [want]}))
+                                print("copy-trade: subscribed to", want)
+                            subscribed = want
                         try:
                             msg = json.loads(raw)
                         except Exception:
                             continue
-                        if not msg.get("mint"):
-                            continue
-                        await self._ingest_real(msg)
+                        await self._route_message(msg, subscribed)
             except Exception as e:
-                print("ingest_loop reconnect:", e)
+                print("stream_loop reconnect:", e)
                 await asyncio.sleep(10)
+
+    async def _route_message(self, msg, wallet):
+        """Route one PumpPortal payload to the right handler."""
+        if not isinstance(msg, dict):
+            return
+        tx = msg.get("txType")
+        mint = msg.get("mint")
+        trader = msg.get("traderPublicKey")
+        # 1) account trade from the wallet we're copying
+        if wallet and trader == wallet and tx in ("buy", "sell"):
+            await self._on_tracked_trade(msg, wallet)
+            return
+        # 2) brand-new token creation -> add to the scanner universe
+        if mint and tx == "create":
+            await self._ingest_real(msg)
 
     async def _ingest_real(self, msg):
         if msg["mint"] in self.coins:
@@ -833,10 +872,9 @@ class Engine:
     def start(self):
         loop = asyncio.get_event_loop()
         self._tasks.append(loop.create_task(self.sim_loop()))
-        self._tasks.append(loop.create_task(self.ingest_loop()))
+        self._tasks.append(loop.create_task(self.stream_loop()))
         self._tasks.append(loop.create_task(self.real_loop()))
         self._tasks.append(loop.create_task(self.dev_check_loop()))
-        self._tasks.append(loop.create_task(self.tracker_loop()))
 
     # ---------------- view builders ----------------
     def coin_view(self, c):

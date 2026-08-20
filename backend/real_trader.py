@@ -172,7 +172,10 @@ async def execute_trade(action, mint, amount, denominated_in_sol):
         raise RuntimeError("tx not confirmed (RPC too slow / blockhash expired)")
 
 
-async def withdraw(destination, sol):
+async def withdraw(destination, sol=None):
+    """Send SOL to any Solana address. If `sol` is None or <= 0, send the entire
+    balance minus a small fee reserve. Returns (signature, sol_sent) once the
+    transfer is confirmed on-chain."""
     kp = get_keypair()
     if not kp:
         raise RuntimeError("wallet not configured")
@@ -180,9 +183,14 @@ async def withdraw(destination, sol):
         to = Pubkey.from_string(destination)
     except Exception:
         raise RuntimeError("invalid destination address")
-    lamports = int(sol * LAMPORTS)
+    if str(to) == str(kp.pubkey()):
+        raise RuntimeError("destination is the bot wallet itself")
     async with AsyncClient(rpc_url()) as rpc:
         bal = (await rpc.get_balance(kp.pubkey())).value
+        if sol is None or sol <= 0:
+            lamports = bal - FEE_RESERVE  # send everything, keep fee reserve
+        else:
+            lamports = int(round(sol * LAMPORTS))
         if lamports <= 0 or lamports + FEE_RESERVE > bal:
             raise RuntimeError("insufficient balance plus fee reserve")
         bh = (await rpc.get_latest_blockhash()).value.blockhash
@@ -190,5 +198,23 @@ async def withdraw(destination, sol):
             from_pubkey=kp.pubkey(), to_pubkey=to, lamports=lamports))
         msg = MessageV0.try_compile(kp.pubkey(), [ix], [], bh)
         tx = VersionedTransaction(msg, [kp])
-        sent = await rpc.send_raw_transaction(bytes(tx))
-    return str(sent.value)
+        sent = await rpc.send_raw_transaction(
+            bytes(tx),
+            opts=TxOpts(skip_preflight=False, preflight_commitment="confirmed",
+                        max_retries=5))
+        sig = sent.value
+        # wait for the transfer to actually land before reporting success
+        for _ in range(16):
+            await asyncio.sleep(2)
+            try:
+                st = await rpc.get_signature_statuses([sig])
+                v = st.value[0]
+            except Exception:
+                continue
+            if v is None:
+                continue
+            if v.err is not None:
+                raise RuntimeError(f"withdraw tx failed on-chain: {v.err}")
+            if v.confirmation_status is not None:
+                return str(sig), lamports / LAMPORTS
+        raise RuntimeError("withdraw not confirmed (RPC slow / blockhash expired)")
