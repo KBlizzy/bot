@@ -514,10 +514,12 @@ const RealWallet = ({ state, copy, refetch }) => {
   const [addr, setAddr] = useState("");
   const [amt, setAmt] = useState("");
   const configured = state?.real_configured;
-  const doWithdraw = async () => {
-    if (!addr || !amt) return toast.error("Enter address and amount");
+  const doWithdraw = async (sendAll = false) => {
+    if (!addr) return toast.error("Enter a destination address");
+    const amount = sendAll ? 0 : parseFloat(amt);
+    if (!sendAll && (!amount || amount <= 0)) return toast.error("Enter an amount");
     try {
-      const r = await api.withdraw(addr, parseFloat(amt));
+      const r = await api.withdraw(addr, amount);
       if (r.simulated) toast.success("Withdrawal (simulated)", { description: r.message });
       else toast.success("SOL sent on-chain", { description: `tx ${shortCa(r.signature)}` });
       setAddr(""); setAmt(""); refetch();
@@ -575,11 +577,15 @@ const RealWallet = ({ state, copy, refetch }) => {
             <input data-testid="withdraw-amount" value={amt} onChange={(e) => setAmt(e.target.value)}
               type="number" step="0.01" placeholder="amount ◎"
               className="flex-1 bg-[#0B0C0E] border border-[#232528] rounded-sm px-3 py-2 font-num text-xs outline-none focus:border-[#FF3B30]" />
-            <button data-testid="withdraw-btn" onClick={doWithdraw}
+            <button data-testid="withdraw-btn" onClick={() => doWithdraw(false)}
               className="px-4 py-2 bg-[#FF3B30] text-white font-num text-xs font-semibold rounded-sm hover:bg-[#ff5147]">
               SEND
             </button>
           </div>
+          <button data-testid="withdraw-all-btn" onClick={() => doWithdraw(true)}
+            className="w-full py-2 border border-[#FF3B30]/40 text-[#FF3B30] font-num text-[11px] font-semibold rounded-sm hover:bg-[#FF3B30]/[0.08]">
+            SEND ALL {fmtSol(state?.real_balance_sol)} → THIS ADDRESS
+          </button>
         </div>
       </div>
     </div>
@@ -671,6 +677,8 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
   const [flatExit, setFlatExit] = useState(1);
   const [minVol, setMinVol] = useState(5000);
   const [cooldown, setCooldown] = useState(5);
+  const [maxHold, setMaxHold] = useState(45);
+  const [minScore, setMinScore] = useState(3.5);
   const [gEnabled, setGEnabled] = useState(true);
   const [dayLimit, setDayLimit] = useState(0.05);
   const [cap, setCap] = useState(0.3);
@@ -687,6 +695,8 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
       setFlatExit(s.flat_exit_min ?? 1);
       setMinVol(s.min_volume_usd ?? 5000);
       setCooldown(s.rebuy_cooldown_min ?? 5);
+      setMaxHold(s.max_hold_min ?? 45);
+      setMinScore(s.min_score ?? 3.5);
       setGEnabled(g.enabled);
       setDayLimit(g.daily_loss_limit_sol);
       setCap(g.total_spend_cap_sol);
@@ -706,6 +716,8 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
         flat_exit_min: parseFloat(flatExit),
         min_volume_usd: parseFloat(minVol),
         rebuy_cooldown_min: parseFloat(cooldown),
+        max_hold_min: parseFloat(maxHold),
+        min_score: parseFloat(minScore),
       });
       await api.setGuardrails({
         enabled: gEnabled,
@@ -740,6 +752,8 @@ const StrategyPanel = ({ state, refetch, onResetSpend }) => {
           <NumField label="Flat Exit (no move)" value={flatExit} onChange={setFlatExit} step="0.5" suffix="min" testid="tune-flatexit" />
           <NumField label="Min 24h Volume" value={minVol} onChange={setMinVol} step="1000" suffix="$" testid="tune-minvol" />
           <NumField label="Re-buy Cooldown" value={cooldown} onChange={setCooldown} step="1" suffix="min" testid="tune-cooldown" />
+          <NumField label="Max Hold (time exit)" value={maxHold} onChange={setMaxHold} step="5" suffix="min" testid="tune-maxhold" />
+          <NumField label="Min Entry Score" value={minScore} onChange={setMinScore} step="0.5" testid="tune-minscore" />
         </div>
 
         <div className="border-t border-[#232528] pt-3 space-y-2.5">
