@@ -124,10 +124,16 @@ async def bot_mode(req: ModeReq):
     await engine.save()
     return {"mode": engine.bot["mode"]}
 
-
 @api_router.post("/bot/strategy")
 async def set_strategy(req: StrategyReq):
     s = {
+        "take_profit": max(0.02, min(req.take_profit, 10)),
+        "stop_loss": max(0.001, min(req.stop_loss, 1)),
+        "trade_size_sol": max(0.001, min(req.trade_size_sol, 100)),
+    }
+
+
+    
         "take_profit": max(0.02, min(req.take_profit, 10)),
         "stop_loss": -abs(req.stop_loss) if req.stop_loss > 0 else max(req.stop_loss, -0.95),
         "trade_size_sol": max(0.001, min(req.trade_size_sol, 100)),
@@ -141,8 +147,9 @@ async def set_strategy(req: StrategyReq):
     engine.bot["strategy"] = s
     engine.bot["settings"]["trade_size_sol"] = s["trade_size_sol"]
     await engine.save()
+    
+    engine.bot["strategy"] = s
     return {"ok": True, "strategy": s}
-
 
 @api_router.post("/bot/guardrails")
 async def set_guardrails(req: GuardrailReq):
