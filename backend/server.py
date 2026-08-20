@@ -308,8 +308,45 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _readiness_report():
+    """Log a clear green/red checklist of what's configured before trading starts."""
+    ok, warn = [], []
+
+    # MongoDB
+    mongo = os.environ.get('MONGO_URL')
+    if mongo:
+        ok.append("MONGO_URL set")
+    else:
+        warn.append("MONGO_URL not set -> using local fallback (mongodb://localhost:27017)")
+
+    # RPC
+    rpc = os.environ.get('SOLANA_RPC_URL', '')
+    if not rpc:
+        warn.append("SOLANA_RPC_URL not set -> falling back to PUBLIC RPC (rate-limited, real trades WILL fail)")
+    elif 'api.mainnet-beta.solana.com' in rpc:
+        warn.append("SOLANA_RPC_URL is the PUBLIC RPC (rate-limited, real trades WILL fail) -> use a Helius/Triton URL")
+    else:
+        ok.append("SOLANA_RPC_URL set (private RPC)")
+
+    # Wallet key
+    if real_trader.is_configured():
+        ok.append(f"SOLANA_PRIVATE_KEY_B58 set -> bot wallet {real_trader.public_key()}")
+    else:
+        warn.append("SOLANA_PRIVATE_KEY_B58 not set -> REAL trading disabled (paper mode only). Run generate_wallet.py")
+
+    logger.info("=== PumpScout readiness ===")
+    for line in ok:
+        logger.info("  [OK]   %s", line)
+    for line in warn:
+        logger.warning("  [WARN] %s", line)
+    if not warn:
+        logger.info("  All systems go: REAL trading is fully configured.")
+    logger.info("===========================")
+
+
 @app.on_event("startup")
 async def startup():
+    _readiness_report()
     await engine.load()
     engine.seed()
     if real_trader.is_configured():
@@ -317,6 +354,7 @@ async def startup():
         bal = await real_trader.get_balance_sol()
         if bal is not None:
             engine.bot["real_balance_sol"] = bal
+            logger.info("bot wallet balance: %.4f SOL", bal)
     engine.start()
     logger.info("engine started (real_configured=%s)", real_trader.is_configured())
 
