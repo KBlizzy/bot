@@ -482,6 +482,13 @@ class Engine:
         for score, c, growth in candidates[:1]:  # conservative: one real buy per tick
             if len(self.real_positions) >= s["max_positions"]:
                 break
+            # SAFETY: only commit real SOL to a coin we can price for real. This
+            # guarantees a real entry price so on-chain TP/SL work, and blocks
+            # buys triggered purely by simulated momentum on un-priceable coins.
+            entry_real = await self._real_price(c["mint"])
+            if entry_real is None:
+                self._log_decision(c, "SKIP", "no verifiable on-chain price — real buy blocked")
+                continue
             await self._real_buy(c, growth)
 
     async def _real_buy(self, c, growth):
